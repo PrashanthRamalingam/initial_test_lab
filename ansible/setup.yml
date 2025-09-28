@@ -1,0 +1,7 @@
+- name: Test Ansible on localhost
+  hosts: local
+  tasks:
+    - name: Create a test file
+      copy:
+        dest: /home/{{ lookup('env','USER') }}/ansible_test.txt
+        content: "Hello from Ansible!\n"
