@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NetDraw — Network Diagram Editor</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='26' fill='%232563eb'/><g stroke='white' stroke-width='4' stroke-linecap='round' fill='none'><path d='M20 26 h16'/><path d='M31 20 l7 6 -7 6'/><path d='M44 38 h-16'/><path d='M33 32 l-7 6 7 6'/></g></svg>">
+<link rel="stylesheet" href="styles.css">
+<!-- Vendored libraries (pinned: jszip@3.10.1, jspdf@2.5.1).
+     JSZip builds the .vsdx package, jsPDF the PDF export.
+     Vendored locally so the app works fully offline. -->
+<script src="js/vendor/jszip.min.js"></script>
+<script src="js/vendor/jspdf.umd.min.js"></script>
+</head>
+<body>
+<header id="toolbar">
+  <div class="brand">🕸️ NetDraw</div>
+
+  <div class="tool-group">
+    <button id="btn-select" class="tool active" title="Select / move (V)">🖱️ Select</button>
+    <button id="btn-connect" class="tool" title="Draw connections (C)">🔗 Connect</button>
+  </div>
+
+  <div class="tool-group">
+    <button id="btn-undo" title="Undo (Ctrl+Z)">↩️ Undo</button>
+    <button id="btn-redo" title="Redo (Ctrl+Y)">↪️ Redo</button>
+    <button id="btn-zoom-fit" title="Fit diagram in view">🔍 Fit</button>
+    <button id="btn-arrange" title="Auto-arrange the diagram (uses the layout direction picker)">📐 Arrange</button>
+    <button id="btn-add-zone" title="Add a named container box (DC, site, VLAN zone)">⬛ Zone</button>
+    <button id="btn-clear" title="Clear diagram">🗑️ Clear</button>
+    <label class="bg-picker" title="Canvas background color">🎨
+      <input id="bg-color" type="color" value="#fafcfe">
+    </label>
+    <button id="btn-bg-reset" title="Reset background to the theme default">↺</button>
+  </div>
+
+  <div class="tool-group">
+    <button id="btn-save-json" title="Save editable diagram file">💾 Save</button>
+    <label class="file-btn" title="Open a saved diagram">📂 Open
+      <input id="file-open" type="file" accept=".json,application/json">
+    </label>
+  </div>
+
+  <div class="tool-group exports">
+    <span class="group-label">Export:</span>
+    <button id="btn-export-png">PNG</button>
+    <button id="btn-export-svg">SVG</button>
+    <button id="btn-export-pdf">PDF</button>
+    <button id="btn-export-vsdx" title="Native Microsoft Visio file">Visio</button>
+    <button id="btn-export-drawio" title="Opens in diagrams.net">draw.io</button>
+  </div>
+</header>
+
+<main id="workspace">
+  <aside id="sidebar">
+    <h2>Devices</h2>
+    <input id="palette-search" type="search" placeholder="Search 47 icons…">
+    <div id="palette"></div>
+  </aside>
+
+  <div id="canvas-wrap">
+    <svg id="canvas">
+      <defs>
+        <pattern id="grid-dots" width="24" height="24" patternUnits="userSpaceOnUse">
+          <circle cx="1.5" cy="1.5" r="1.2" fill="#d6dde8"/>
+        </pattern>
+      </defs>
+      <rect id="grid-bg" width="100%" height="100%" fill="url(#grid-dots)"/>
+      <g id="scene">
+        <g id="zone-layer"></g>
+        <g id="edge-layer"></g>
+        <g id="node-layer"></g>
+        <g id="overlay-layer"></g>
+      </g>
+    </svg>
+    <div id="status">Loading…</div>
+    <div id="gen-bar">
+      <input id="gen-input" type="text"
+             placeholder='Describe a network… e.g. "connect two routers to data center plus two firewalls"'>
+      <select id="gen-dir" title="Layout direction for generated and rearranged diagrams">
+        <option value="vertical">⬇ Vertical</option>
+        <option value="horizontal">➡ Horizontal</option>
+      </select>
+      <button id="btn-generate" title="Generate a diagram from the description">✨ Generate</button>
+    </div>
+  </div>
+
+  <aside id="props-panel">
+    <h2>Properties</h2>
+    <div id="props"></div>
+    <div class="shortcuts">
+      <h2>Shortcuts</h2>
+      <ul>
+        <li><kbd>V</kbd> select mode</li>
+        <li><kbd>C</kbd> connect mode</li>
+        <li><kbd>Del</kbd> delete selection</li>
+        <li><kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Y</kbd> undo / redo</li>
+        <li>Double-click — rename</li>
+        <li>Scroll — zoom · drag empty space — pan</li>
+      </ul>
+    </div>
+  </aside>
+</main>
+
+<script src="js/icons.js"></script>
+<script src="js/app.js"></script>
+<script src="js/export.js"></script>
+<script src="js/generate.js"></script>
+</body>
+</html>

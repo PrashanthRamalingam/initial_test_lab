@@ -1,0 +1,447 @@
+* { box-sizing: border-box; margin: 0; }
+
+/* Theme tokens. Light is the base; dark redefines tokens only, both for the
+   OS preference and for an explicit data-theme="dark" stamp. */
+:root {
+  --bg: #f6f8fb;
+  --canvas: #fafcfe;
+  --panel: #ffffff;
+  --panel-2: #f3f6fa;
+  --border: #dfe6ef;
+  --text: #1e2a3a;
+  --muted: #5b6b7f;
+  --accent: #2563eb;
+  --accent-soft: rgba(37, 99, 235, 0.07);
+  --connect: #16a34a;
+  --connect-soft: rgba(22, 163, 74, 0.08);
+  --grid-dot: #d3dce8;
+  --edge: #64748b;
+  --edge-label: #475569;
+  --edge-label-bg: #ffffff;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --danger-text: #b91c1c;
+  --kbd-bg: #eef2f7;
+  --shadow: rgba(15, 23, 42, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1520;
+    --canvas: #121a27;
+    --panel: #161e2c;
+    --panel-2: #1c2636;
+    --border: #2a3648;
+    --text: #e6ecf4;
+    --muted: #94a4b8;
+    --accent: #5c8bf5;
+    --accent-soft: rgba(92, 139, 245, 0.12);
+    --connect: #34d399;
+    --connect-soft: rgba(52, 211, 153, 0.12);
+    --grid-dot: #263244;
+    --edge: #8b9cb3;
+    --edge-label: #aab8ca;
+    --edge-label-bg: #161e2c;
+    --danger-bg: #2a1416;
+    --danger-border: #56262a;
+    --danger-text: #f0a3a3;
+    --kbd-bg: #1c2636;
+    --shadow: rgba(2, 8, 20, 0.4);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1520;
+  --canvas: #121a27;
+  --panel: #161e2c;
+  --panel-2: #1c2636;
+  --border: #2a3648;
+  --text: #e6ecf4;
+  --muted: #94a4b8;
+  --accent: #5c8bf5;
+  --accent-soft: rgba(92, 139, 245, 0.12);
+  --connect: #34d399;
+  --connect-soft: rgba(52, 211, 153, 0.12);
+  --grid-dot: #263244;
+  --edge: #8b9cb3;
+  --edge-label: #aab8ca;
+  --edge-label-bg: #161e2c;
+  --danger-bg: #2a1416;
+  --danger-border: #56262a;
+  --danger-text: #f0a3a3;
+  --kbd-bg: #1c2636;
+  --shadow: rgba(2, 8, 20, 0.4);
+}
+
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+
+/* ---------- Toolbar ---------- */
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { font-weight: 700; font-size: 16px; margin-right: 6px; }
+
+.tool-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border-left: 1px solid var(--border);
+}
+.group-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+#toolbar button, .file-btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+#toolbar button:hover, .file-btn:hover { border-color: var(--accent); }
+#toolbar button:focus-visible, .palette-item:focus-visible,
+#gen-input:focus-visible, #palette-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+#toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.file-btn input { display: none; }
+.exports button { font-weight: 600; }
+
+/* ---------- Layout ---------- */
+
+#workspace { flex: 1; display: flex; min-height: 0; }
+
+#sidebar, #props-panel {
+  width: 210px;
+  background: var(--panel);
+  overflow-y: auto;
+  padding: 12px;
+  flex-shrink: 0;
+}
+#sidebar { border-right: 1px solid var(--border); }
+#props-panel { border-left: 1px solid var(--border); }
+
+#sidebar h2, #props-panel h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+#palette-search {
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+  padding: 6px 9px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+#palette-search::placeholder { color: var(--muted); opacity: 0.8; }
+
+.palette-cat {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 12px 0 6px;
+}
+.palette-cat:first-of-type { margin-top: 2px; }
+
+.palette-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.palette-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: grab;
+  background: var(--panel-2);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.palette-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+.palette-item svg { width: 34px; height: 34px; }
+.palette-item span { font-size: 10.5px; text-align: center; color: var(--text); line-height: 1.15; }
+
+/* ---------- Canvas ---------- */
+
+#canvas-wrap { position: relative; flex: 1; min-width: 0; }
+/* touch-action is not inherited and browsers resolve it from the event
+   target upward, so the whole SVG subtree must opt out of native touch
+   gestures or drags get a pointercancel mid-move. */
+#canvas, #canvas * {
+  touch-action: none; /* let pointer events own touch: drag, pan, pinch */
+}
+#canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: var(--canvas);
+}
+#grid-dots circle { fill: var(--grid-dot); }
+
+#status {
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  pointer-events: none;
+  max-width: 70%;
+  opacity: 0.94;
+}
+
+#gen-bar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  display: flex;
+  gap: 8px;
+  width: min(620px, calc(100% - 40px));
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  box-shadow: 0 6px 24px var(--shadow);
+}
+#gen-input {
+  flex: 1;
+  font: inherit;
+  font-size: 13.5px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  padding: 4px 6px;
+  min-width: 0;
+}
+#gen-input::placeholder { color: var(--muted); opacity: 0.8; }
+#gen-dir {
+  font: inherit;
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 4px 6px;
+  cursor: pointer;
+}
+#btn-generate {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#btn-generate:hover { filter: brightness(1.08); }
+#btn-generate:disabled { opacity: 0.6; cursor: wait; }
+
+.bg-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.bg-picker input {
+  width: 30px;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+/* Zones (container boxes for DCs / sites) */
+.zone { cursor: move; }
+.zone-rect { fill-opacity: 0.07; stroke-width: 1.6; stroke-dasharray: 7 5; }
+.zone.selected .zone-rect { fill-opacity: 0.12; stroke-width: 2.4; stroke-dasharray: none; }
+.zone-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.zone-resize { cursor: nwse-resize; }
+
+/* Nodes */
+.node { cursor: move; }
+.node-box { fill: transparent; stroke: transparent; stroke-width: 2; rx: 10; }
+.node:hover .node-box { fill: var(--accent-soft); }
+.node.selected .node-box { stroke: var(--accent); stroke-dasharray: 5 3; fill: var(--accent-soft); }
+.node.connect-source .node-box { stroke: var(--connect); stroke-dasharray: 5 3; fill: var(--connect-soft); }
+.node-label {
+  font-size: 13px;
+  font-weight: 600;
+  text-anchor: middle;
+  fill: var(--text);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Edges */
+.edge-hit { stroke: transparent; stroke-width: 14; fill: none; cursor: pointer; }
+.edge-line { stroke: var(--edge); stroke-width: 2; fill: none; pointer-events: none; }
+.edge:hover .edge-line { stroke: var(--accent); }
+.edge.selected .edge-line { stroke: var(--accent); stroke-width: 3; }
+.edge-label {
+  font-size: 11px;
+  fill: var(--edge-label);
+  text-anchor: middle;
+  dominant-baseline: middle;
+  user-select: none;
+}
+.edge-label-bg { fill: var(--edge-label-bg); stroke: var(--border); rx: 4; }
+
+.connect-preview { stroke: var(--connect); stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+
+/* ---------- Properties panel ---------- */
+
+#props label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+#props h3 { font-size: 14px; margin-bottom: 12px; }
+#props input[type="text"], #props select {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel-2);
+}
+#props input[type="color"] {
+  width: 100%;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+#props .danger {
+  font: inherit;
+  font-size: 13px;
+  width: 100%;
+  padding: 7px;
+  border: 1px solid var(--danger-border);
+  border-radius: 7px;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  cursor: pointer;
+}
+.props-hint { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+.shortcuts { margin-top: 22px; }
+.shortcuts ul { list-style: none; font-size: 12px; color: var(--muted); line-height: 1.9; padding: 0; }
+kbd {
+  background: var(--kbd-bg);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+/* ---------- Small screens (phones / narrow windows) ----------
+   The palette becomes a horizontal strip above the canvas, and the
+   properties panel becomes a bottom sheet that appears only while a node
+   or connection is selected (body.has-selection, set by app.js). */
+
+@media (max-width: 860px) {
+  #workspace { flex-direction: column; }
+
+  #sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 8px 10px;
+    flex-shrink: 0;
+  }
+  #sidebar h2 { display: none; }
+  #palette-search { margin-bottom: 8px; }
+  #palette {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .palette-cat { display: none; }
+  .palette-grid { display: flex; gap: 8px; }
+  .palette-item { min-width: 68px; }
+
+  #props-panel {
+    display: none;
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: 76px;
+    width: auto;
+    max-height: 42vh;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 30px var(--shadow);
+    z-index: 20;
+  }
+  body.has-selection #props-panel { display: block; }
+  .shortcuts { display: none; }
+
+  #gen-bar { bottom: 10px; width: calc(100% - 20px); }
+  #status { max-width: calc(100% - 20px); }
+  .brand { display: none; }
+  #toolbar { gap: 6px; padding: 6px 8px; }
+  .tool-group { padding: 0 6px; }
+}
