@@ -21,6 +21,8 @@ const GRID = 8;             // snap grid
 let state = {
   nodes: [],   // {id, type, x, y, label, color}
   edges: [],   // {id, from, to, label, style: 'solid'|'dashed', shape: 'straight'|'elbow'}
+  zones: [],   // {id, x, y, w, h, label, color} — named container boxes (DCs, sites)
+  bg: null,    // custom canvas background color, null = theme default
   counter: 1
 };
 
@@ -33,6 +35,7 @@ let view = { x: 0, y: 0, zoom: 1 };
 
 const svg = document.getElementById('canvas');
 const scene = document.getElementById('scene');
+const zoneLayer = document.getElementById('zone-layer');
 const edgeLayer = document.getElementById('edge-layer');
 const nodeLayer = document.getElementById('node-layer');
 const overlayLayer = document.getElementById('overlay-layer');
@@ -45,6 +48,13 @@ const $ = (sel) => document.querySelector(sel);
 const uid = (p) => p + (state.counter++);
 const snap = (v) => Math.round(v / GRID) * GRID;
 const nodeById = (id) => state.nodes.find(n => n.id === id);
+const zoneById = (id) => (state.zones || []).find(z => z.id === id);
+
+// Older saved diagrams predate zones/bg — normalize after any state swap.
+function normalizeState() {
+  if (!Array.isArray(state.zones)) state.zones = [];
+  if (state.bg === undefined) state.bg = null;
+}
 
 function toScene(evt) {
   // Convert a mouse event to scene (diagram) coordinates, honoring pan/zoom.
@@ -69,9 +79,11 @@ function setStatus(msg) { $('#status').textContent = msg; }
 
 function render() {
   scene.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.zoom})`);
+  svg.style.background = state.bg || '';
   // On small screens the properties panel is a bottom sheet shown only
   // while something is selected (see the media query in styles.css).
   document.body.classList.toggle('has-selection', !!selection);
+  renderZones();
   renderEdges();
   renderNodes();
   renderProperties();
@@ -80,11 +92,11 @@ function render() {
 
 function nodeCenter(n) { return { x: n.x + NODE_W / 2, y: n.y + ICON_SIZE / 2 + 10 }; }
 
-// Point where the edge meets the node's bounding box, so lines stop at the
-// icon instead of running underneath it.
+// Point where the edge meets the icon's edge — lines touch the device with
+// no visible gap, without running underneath it.
 function clipToNode(n, towards) {
   const c = nodeCenter(n);
-  const hw = ICON_SIZE / 2 + 8, hh = ICON_SIZE / 2 + 8;
+  const hw = ICON_SIZE / 2 + 2, hh = ICON_SIZE / 2 + 2;
   const dx = towards.x - c.x, dy = towards.y - c.y;
   if (dx === 0 && dy === 0) return c;
   const sx = hw / Math.abs(dx || 1e-9), sy = hh / Math.abs(dy || 1e-9);
@@ -120,6 +132,32 @@ function edgePath(e) {
   }
   const p1 = clipToNode(a, cb), p2 = clipToNode(b, ca);
   return { d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`, mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 } };
+}
+
+function renderZones() {
+  zoneLayer.innerHTML = '';
+  for (const z of (state.zones || [])) {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.classList.add('zone');
+    g.dataset.id = z.id;
+    const selected = selection && selection.kind === 'zone' && selection.id === z.id;
+    if (selected) g.classList.add('selected');
+    g.innerHTML = `
+      <rect class="zone-rect" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="12"
+            fill="${z.color}" stroke="${z.color}"/>
+      <text class="zone-title" x="${z.x + 14}" y="${z.y + 22}" fill="${z.color}">${escapeHtml(z.label)}</text>
+      ${selected ? `<rect class="zone-resize" x="${z.x + z.w - 9}" y="${z.y + z.h - 9}"
+            width="16" height="16" rx="4" fill="${z.color}"/>` : ''}`;
+    zoneLayer.appendChild(g);
+  }
+}
+
+// Nodes whose center sits inside the zone rectangle move with it.
+function zoneMembers(z) {
+  return state.nodes.filter(n => {
+    const c = nodeCenter(n);
+    return c.x >= z.x && c.x <= z.x + z.w && c.y >= z.y && c.y <= z.y + z.h;
+  });
 }
 
 function renderEdges() {
@@ -182,7 +220,7 @@ function renderNodes() {
       <rect class="node-box" x="${pad - 6}" y="4" width="${ICON_SIZE + 12}" height="${ICON_SIZE + 12}" rx="10"/>
       <g class="node-icon" transform="translate(${pad},10) scale(${ICON_SIZE / 64})"
          color="${n.color || icon.color}">${icon.svg}</g>
-      <text class="node-label" x="${NODE_W / 2}" y="${ICON_SIZE + 32}">${escapeHtml(n.label)}</text>`;
+      <text class="node-label" x="${NODE_W / 2}" y="${ICON_SIZE + 24}">${escapeHtml(n.label)}</text>`;
     nodeLayer.appendChild(g);
   }
 }
@@ -306,6 +344,8 @@ svg.addEventListener('pointerdown', ev => {
 
   const nodeEl = ev.target.closest('.node');
   const edgeEl = ev.target.closest('.edge');
+  const zoneHandleEl = ev.target.closest('.zone-resize');
+  const zoneEl = ev.target.closest('.zone');
 
   if (nodeEl) {
     const id = nodeEl.dataset.id;
@@ -320,6 +360,21 @@ svg.addEventListener('pointerdown', ev => {
     render();
   } else if (edgeEl && mode === 'select') {
     selection = { kind: 'edge', id: edgeEl.dataset.id };
+    render();
+  } else if (zoneHandleEl && mode === 'select') {
+    const id = zoneHandleEl.closest('.zone').dataset.id;
+    selection = { kind: 'zone', id };
+    drag = { kind: 'zone-resize', id, moved: false };
+    render();
+  } else if (zoneEl && mode === 'select') {
+    const id = zoneEl.dataset.id;
+    const z = zoneById(id);
+    const p = toScene(ev);
+    selection = { kind: 'zone', id };
+    drag = {
+      kind: 'zone', id, dx: p.x - z.x, dy: p.y - z.y, moved: false,
+      members: zoneMembers(z).map(n => ({ id: n.id, dx: p.x - n.x, dy: p.y - n.y }))
+    };
     render();
   } else {
     // Empty canvas: deselect; middle-drag or space/left-drag pans.
@@ -359,6 +414,24 @@ window.addEventListener('pointermove', ev => {
     n.x = snap(p.x - drag.dx);
     n.y = snap(p.y - drag.dy);
     render();
+  } else if (drag.kind === 'zone') {
+    const z = zoneById(drag.id);
+    const p = toScene(ev);
+    if (!drag.moved) { pushUndo(); drag.moved = true; }
+    z.x = snap(p.x - drag.dx);
+    z.y = snap(p.y - drag.dy);
+    for (const m of drag.members) {
+      const n = nodeById(m.id);
+      if (n) { n.x = snap(p.x - m.dx); n.y = snap(p.y - m.dy); }
+    }
+    render();
+  } else if (drag.kind === 'zone-resize') {
+    const z = zoneById(drag.id);
+    const p = toScene(ev);
+    if (!drag.moved) { pushUndo(); drag.moved = true; }
+    z.w = Math.max(120, snap(p.x - z.x));
+    z.h = Math.max(90, snap(p.y - z.y));
+    render();
   } else if (drag.kind === 'pan') {
     view.x = drag.vx + (ev.clientX - drag.sx);
     view.y = drag.vy + (ev.clientY - drag.sy);
@@ -377,6 +450,7 @@ window.addEventListener('pointercancel', endPointer);
 svg.addEventListener('dblclick', ev => {
   const nodeEl = ev.target.closest('.node');
   const edgeEl = ev.target.closest('.edge');
+  const zoneEl = ev.target.closest('.zone');
   if (nodeEl) {
     const n = nodeById(nodeEl.dataset.id);
     const label = prompt('Node label:', n.label);
@@ -385,6 +459,10 @@ svg.addEventListener('dblclick', ev => {
     const e = state.edges.find(x => x.id === edgeEl.dataset.id);
     const label = prompt('Connection label (e.g. "GigE 1/0/1", "VPN"):', e.label || '');
     if (label !== null) { pushUndo(); e.label = label.trim(); render(); }
+  } else if (zoneEl) {
+    const z = zoneById(zoneEl.dataset.id);
+    const label = prompt('Zone name (e.g. "DC-EAST"):', z.label);
+    if (label !== null) { pushUndo(); z.label = label.trim() || z.label; render(); }
   }
 });
 
@@ -453,6 +531,9 @@ function deleteSelection() {
   if (selection.kind === 'node') {
     state.nodes = state.nodes.filter(n => n.id !== selection.id);
     state.edges = state.edges.filter(e => e.from !== selection.id && e.to !== selection.id);
+  } else if (selection.kind === 'zone') {
+    // Deleting a zone keeps the devices inside it.
+    state.zones = state.zones.filter(z => z.id !== selection.id);
   } else {
     state.edges = state.edges.filter(e => e.id !== selection.id);
   }
@@ -494,6 +575,20 @@ function renderProperties() {
   const panel = $('#props');
   if (!selection) {
     panel.innerHTML = '<p class="props-hint">Select a node or connection to edit its properties.</p>';
+    return;
+  }
+  if (selection.kind === 'zone') {
+    const z = zoneById(selection.id);
+    if (!z) { panel.innerHTML = ''; return; }
+    panel.innerHTML = `
+      <h3>Zone</h3>
+      <label>Name <input id="p-zlabel" type="text" value="${escapeHtml(z.label)}"></label>
+      <label>Color <input id="p-zcolor" type="color" value="${z.color}"></label>
+      <p class="props-hint">${zoneMembers(z).length} device(s) inside. Drag the zone to move them together; drag the corner handle to resize.</p>
+      <button id="p-zdelete" class="danger">Delete zone (keeps devices)</button>`;
+    $('#p-zlabel').addEventListener('change', ev => { pushUndo(); z.label = ev.target.value; render(); });
+    $('#p-zcolor').addEventListener('input', ev => { z.color = ev.target.value; renderZones(); saveLocal(); });
+    $('#p-zdelete').addEventListener('click', deleteSelection);
     return;
   }
   if (selection.kind === 'node') {
@@ -547,6 +642,7 @@ function loadLocal() {
       if (parsed && Array.isArray(parsed.nodes)) state = parsed;
     }
   } catch (_) {}
+  normalizeState();
 }
 
 function downloadBlob(blob, filename) {
@@ -571,6 +667,7 @@ $('#file-open').addEventListener('change', ev => {
       if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) throw new Error('bad file');
       pushUndo();
       state = parsed;
+      normalizeState();
       selection = null;
       render();
       setStatus(`Loaded ${f.name} (${state.nodes.length} nodes, ${state.edges.length} connections).`);
@@ -584,10 +681,35 @@ $('#file-open').addEventListener('change', ev => {
 $('#btn-clear').addEventListener('click', () => {
   if (!state.nodes.length || confirm('Clear the whole diagram?')) {
     pushUndo();
-    state = { nodes: [], edges: [], counter: state.counter };
+    state = { nodes: [], edges: [], zones: [], bg: state.bg, counter: state.counter };
     selection = null;
     render();
   }
+});
+
+$('#btn-add-zone').addEventListener('click', () => {
+  pushUndo();
+  const r = svg.getBoundingClientRect();
+  const cx = (r.width / 2 - view.x) / view.zoom;
+  const cy = (r.height / 2 - view.y) / view.zoom;
+  const zone = {
+    id: uid('z'), x: snap(cx - 170), y: snap(cy - 120),
+    w: 340, h: 240, label: 'Zone', color: '#3b82f6'
+  };
+  state.zones.push(zone);
+  selection = { kind: 'zone', id: zone.id };
+  render();
+  setStatus('Zone added — double-click to name it (e.g. "DC-EAST"); drag devices inside.');
+});
+
+$('#bg-color').addEventListener('input', ev => {
+  state.bg = ev.target.value;
+  render();
+});
+$('#btn-bg-reset').addEventListener('click', () => {
+  state.bg = null;
+  render();
+  setStatus('Background follows the theme again.');
 });
 
 // ---------------------------------------------------------------------------
@@ -643,5 +765,6 @@ if (!state.nodes.length) {
       { id: 'e7', from: 'n5', to: 'n8', label: '', style: 'solid', shape: 'elbow' }
     ]
   };
+  normalizeState();
 }
 setMode('select');

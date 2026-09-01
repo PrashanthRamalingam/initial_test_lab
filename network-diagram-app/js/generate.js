@@ -236,12 +236,45 @@ function parseSegment(seg) {
   return { entries, linkTerms };
 }
 
-// Full parse: text → {groups} where each group has entries + linkTerms;
-// null when no devices or hostnames were recognized at all.
+// Zone (container) grammar, detected per sentence:
+//   "within dc DC-EAST …" / "in the NYC1 data center …" → named zone
+//   "… between two dcs"                                  → DC 1 / DC 2
+function detectZone(sentence) {
+  if (/\bbetween\s+(?:two|2)\s+(?:dcs?|data\s*cent(?:er|re)s?|sites?)\b/i.test(sentence)) {
+    return { pair: true };
+  }
+  let m = /\b(?:in|within|inside|at)\s+(?:the\s+)?(?:dc|data\s*cent(?:er|re)|datacenter|site|zone)\s+([A-Za-z][\w-]*)/i.exec(sentence);
+  if (m) return { label: m[1] };
+  m = /\b(?:in|within|inside|at)\s+(?:the\s+)?([A-Za-z][\w-]*)\s+(?:dc|data\s*cent(?:er|re)|datacenter|site|zone)\b/i.exec(sentence);
+  if (m) return { label: m[1] };
+  if (/\b(?:in|within|inside)\s+(?:a\s+|the\s+)?(?:dc|data\s*cent(?:er|re)|datacenter)\b/i.test(sentence)) {
+    return { label: 'DC' };
+  }
+  return null;
+}
+
+// Full parse: text → {groups} where each group has entries + linkTerms and
+// optionally a zoneLabel; null when nothing was recognized. Sentences are
+// split on ". " / ";" / newlines (a period between digits, as in an IP or
+// Po5.501, does not end a sentence).
 function parseInstruction(text) {
-  const groups = splitGroups(text)
-    .map(parseSegment)
-    .filter(g => g.entries.length > 0);
+  const sentences = text.split(/[;\n]+|\.\s+|\.$/).map(s => s.trim()).filter(Boolean);
+  const groups = [];
+  for (const sentence of sentences) {
+    const zone = detectZone(sentence);
+    const segs = splitGroups(sentence).map(parseSegment).filter(g => g.entries.length > 0);
+    if (zone && zone.pair && segs.length >= 2) {
+      segs[0].zoneLabel = 'DC 1';
+      segs[segs.length - 1].zoneLabel = 'DC 2';
+    } else if (zone && zone.label) {
+      for (const g of segs) g.zoneLabel = zone.label;
+    }
+    // Groups chain into connections only WITHIN a sentence — a new
+    // sentence starts a new chain (use hostnames to connect across
+    // sentences: "core-sw-01 to web-srv-01").
+    if (segs.length) segs[0].chainStart = true;
+    groups.push(...segs);
+  }
   return groups.length ? { groups } : null;
 }
 
@@ -254,6 +287,8 @@ function buildFromGroups(groups) {
   const registry = new Map();   // hostname / singleton-type → node
   const typeCounts = {};
   const edgeKeys = new Set();
+  const zoneOf = new Map();     // node id → zone label (first zone wins)
+  const placedGlobal = new Set(); // nodes already given a layout slot
 
   function makeNode(type, label) {
     const icon = NETWORK_ICONS[type];
@@ -263,10 +298,22 @@ function buildFromGroups(groups) {
   }
 
   for (const group of groups) {
-    const layer = [];
+    // conn: every node this group references (for connections, repeats
+    // included); fresh: nodes appearing for the FIRST time anywhere — only
+    // those get a layout slot here, so a later sentence that mentions an
+    // existing device again doesn't yank it out of position.
+    const layer = { conn: [], fresh: [] };
     const inLayer = new Set();
     const place = (node) => {
-      if (!inLayer.has(node.id)) { layer.push(node); inLayer.add(node.id); }
+      if (!inLayer.has(node.id)) {
+        layer.conn.push(node);
+        inLayer.add(node.id);
+        if (!placedGlobal.has(node.id)) {
+          layer.fresh.push(node);
+          placedGlobal.add(node.id);
+        }
+      }
+      if (group.zoneLabel && !zoneOf.has(node.id)) zoneOf.set(node.id, group.zoneLabel);
     };
 
     for (const entry of group.entries) {
@@ -296,14 +343,17 @@ function buildFromGroups(groups) {
         }
       }
     }
-    if (layer.length) layers.push({ layer, linkTerms: group.linkTerms });
+    if (layer.conn.length) {
+      layers.push({ layer, linkTerms: group.linkTerms, chainStart: group.chainStart });
+    }
   }
 
   // Connect consecutive layers. The label comes from the source group's
   // link terms ("via fiber to …"); trailing terms on the final group label
   // the connection into it ("… to swg-01 intra link").
   for (let i = 0; i + 1 < layers.length; i++) {
-    const a = layers[i].layer, b = layers[i + 1].layer;
+    if (layers[i + 1].chainStart) continue;
+    const a = layers[i].layer.conn, b = layers[i + 1].layer.conn;
     let terms = layers[i].linkTerms;
     if (i + 2 === layers.length && layers[i + 1].linkTerms.length) {
       terms = [...new Set(terms.concat(layers[i + 1].linkTerms))];
@@ -323,7 +373,39 @@ function buildFromGroups(groups) {
       for (const na of a) for (const nb of b) connect(na, nb, shape);
     }
   }
-  return { nodes, edges, layers: layers.map(l => l.layer) };
+  // Zone membership as [{label, nodes}] in first-seen order.
+  const zoneGroups = [];
+  for (const [nodeId, label] of zoneOf) {
+    let zg = zoneGroups.find(z => z.label === label);
+    if (!zg) { zg = { label, nodes: [] }; zoneGroups.push(zg); }
+    const node = nodes.find(n => n.id === nodeId);
+    if (node) zg.nodes.push(node);
+  }
+  return {
+    nodes, edges, zoneGroups,
+    layers: layers.map(l => l.layer.fresh).filter(f => f.length)
+  };
+}
+
+// Turn zone membership into container rectangles around the laid-out
+// member nodes. Call AFTER layout, since it reads node positions.
+const ZONE_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899', '#14b8a6'];
+function makeZones(zoneGroups) {
+  const zones = [];
+  (zoneGroups || []).forEach((zg, i) => {
+    if (!zg.nodes.length) return;
+    const xs = zg.nodes.map(n => n.x), ys = zg.nodes.map(n => n.y);
+    const pad = 28, titleH = 30;
+    const x = Math.min(...xs) - pad;
+    const y = Math.min(...ys) - pad - titleH;
+    zones.push({
+      id: uid('z'), x: snap(x), y: snap(y),
+      w: snap(Math.max(...xs) + NODE_W + pad - x),
+      h: snap(Math.max(...ys) + NODE_H + pad - y),
+      label: zg.label, color: ZONE_COLORS[i % ZONE_COLORS.length]
+    });
+  });
+  return zones;
 }
 
 // --- Layout direction: top-down (vertical) or left-right (horizontal).
@@ -424,21 +506,34 @@ function layoutGraph(nodes, edges) {
 }
 
 // Re-run auto-layout on whatever is on the canvas (after manual edits, or
-// to flip between vertical and horizontal).
+// to flip between vertical and horizontal). Zones follow their member
+// nodes: membership is captured before the layout moves everything, and
+// each zone box is re-fitted around its members afterwards.
 function rearrange() {
   if (!state.nodes.length) return;
   pushUndo();
+  const memberships = (state.zones || []).map(z => ({ z, members: zoneMembers(z) }));
   layoutGraph(state.nodes, state.edges);
+  for (const { z, members } of memberships) {
+    if (!members.length) continue;
+    const xs = members.map(n => n.x), ys = members.map(n => n.y);
+    const pad = 28, titleH = 30;
+    z.x = snap(Math.min(...xs) - pad);
+    z.y = snap(Math.min(...ys) - pad - titleH);
+    z.w = snap(Math.max(...xs) + NODE_W + pad - z.x);
+    z.h = snap(Math.max(...ys) + NODE_H + pad - z.y);
+  }
   render();
   document.getElementById('btn-zoom-fit').click();
   setStatus(`Rearranged ${layoutDir === 'horizontal' ? 'left-to-right' : 'top-down'}.`);
 }
 
 // Apply a generated diagram: replace current content (undo restores it).
-function applyGenerated(nodes, edges, sourceText, note) {
+function applyGenerated(nodes, edges, sourceText, note, zones) {
   pushUndo();
   state.nodes = nodes;
   state.edges = edges;
+  state.zones = zones || [];
   selection = null;
   render();
   document.getElementById('btn-zoom-fit').click();
@@ -450,10 +545,10 @@ function applyGenerated(nodes, edges, sourceText, note) {
 function generateFromText(text, note) {
   const parsed = parseInstruction(text);
   if (!parsed) return false;
-  const { nodes, edges, layers } = buildFromGroups(parsed.groups);
+  const { nodes, edges, layers, zoneGroups } = buildFromGroups(parsed.groups);
   if (!nodes.length) return false;
   layoutLayers(layers);
-  applyGenerated(nodes, edges, text, note);
+  applyGenerated(nodes, edges, text, note, makeZones(zoneGroups));
   return true;
 }
 

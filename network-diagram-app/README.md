@@ -88,6 +88,13 @@ The grammar also understands real network language:
   unnamed mentions of singleton infrastructure (Azure/cloud, internet,
   data center, DNS, CDN) collapse into one node, so a paragraph that says
   "Azure" eleven times draws one cloud.
+- **Zones (DC / site containers)** — `within dc NYC1 two routers to
+  switch core-sw-01` draws a named dashed container box around those
+  devices; `… between two dcs` creates DC 1 / DC 2. Sentences are
+  independent chains — connect across DCs by hostname
+  (`core-sw-01 to web-srv-01 intra link`). Zones can also be added
+  manually (⬛ Zone button), renamed, recolored, resized by the corner
+  handle, and dragged (their devices move with them).
 
 Long multi-line configs (IP addresses, VLAN tables) exceed what a regex
 grammar can do, so `handleGenerate()` routes those to `window.aiGenerate`

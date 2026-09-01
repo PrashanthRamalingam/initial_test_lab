@@ -24,10 +24,14 @@ function xmlEscape(s) {
 }
 
 function diagramBounds() {
-  if (!state.nodes.length) return { x: 0, y: 0, w: 800, h: 600 };
-  const xs = state.nodes.map(n => n.x), ys = state.nodes.map(n => n.y);
+  const zones = state.zones || [];
+  if (!state.nodes.length && !zones.length) return { x: 0, y: 0, w: 800, h: 600 };
+  const xs = state.nodes.map(n => n.x).concat(zones.map(z => z.x));
+  const ys = state.nodes.map(n => n.y).concat(zones.map(z => z.y));
+  const xe = state.nodes.map(n => n.x + NODE_W).concat(zones.map(z => z.x + z.w));
+  const ye = state.nodes.map(n => n.y + NODE_H).concat(zones.map(z => z.y + z.h));
   const minX = Math.min(...xs) - 40, minY = Math.min(...ys) - 40;
-  const maxX = Math.max(...xs) + NODE_W + 40, maxY = Math.max(...ys) + NODE_H + 40;
+  const maxX = Math.max(...xe) + 40, maxY = Math.max(...ye) + 40;
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
@@ -39,7 +43,14 @@ function buildExportSvg() {
   const b = diagramBounds();
   let out = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${b.x} ${b.y} ${b.w} ${b.h}" ` +
     `width="${b.w}" height="${b.h}" font-family="Segoe UI, Helvetica, Arial, sans-serif">\n` +
-    `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="#ffffff"/>\n`;
+    `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${state.bg || '#ffffff'}"/>\n`;
+
+  for (const z of (state.zones || [])) {
+    out += `<rect x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="12" ` +
+      `fill="${z.color}" fill-opacity="0.07" stroke="${z.color}" stroke-width="1.6" stroke-dasharray="7 5"/>\n` +
+      `<text x="${z.x + 14}" y="${z.y + 22}" font-size="12.5" font-weight="700" ` +
+      `letter-spacing="0.5" fill="${z.color}">${xmlEscape(z.label.toUpperCase())}</text>\n`;
+  }
 
   for (const e of state.edges) {
     const p = edgePath(e);
@@ -58,7 +69,7 @@ function buildExportSvg() {
     const pad = (NODE_W - ICON_SIZE) / 2;
     out += `<g transform="translate(${n.x},${n.y})">` +
       `<g transform="translate(${pad},10) scale(${ICON_SIZE / 64})" color="${n.color || icon.color}">${icon.svg}</g>` +
-      `<text x="${NODE_W / 2}" y="${ICON_SIZE + 32}" text-anchor="middle" font-size="13" font-weight="600" fill="#1e293b">${xmlEscape(n.label)}</text>` +
+      `<text x="${NODE_W / 2}" y="${ICON_SIZE + 24}" text-anchor="middle" font-size="13" font-weight="600" fill="#1e293b">${xmlEscape(n.label)}</text>` +
       `</g>\n`;
   }
   return out + '</svg>';
@@ -135,6 +146,10 @@ const DRAWIO_STYLES = {
 
 function buildDrawioXml() {
   let cells = '';
+  for (const z of (state.zones || [])) {
+    cells += `<mxCell id="${z.id}" value="${xmlEscape(z.label)}" style="rounded=1;dashed=1;fillColor=${z.color};opacity=25;verticalAlign=top;fontStyle=1;html=1;" vertex="1" parent="1">` +
+      `<mxGeometry x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" as="geometry"/></mxCell>`;
+  }
   for (const n of state.nodes) {
     const style = (DRAWIO_STYLES[n.type] || DRAWIO_STYLES.default) +
       `;fillColor=${n.color};strokeColor=#334155;fontColor=#1e293b;verticalLabelPosition=bottom;verticalAlign=top;html=1;`;
@@ -192,6 +207,31 @@ function buildVsdx() {
   let shapes = '';
   let shapeId = 1;
   const nodeShapeIds = {};
+
+  for (const z of (state.zones || [])) {
+    const id = shapeId++;
+    const w = z.w / PX_PER_IN, h = z.h / PX_PER_IN;
+    const cx = ix(z.x + z.w / 2), cy = iy(z.y + z.h / 2);
+    shapes += `
+   <Shape ID="${id}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
+    <Cell N="PinX" V="${cx.toFixed(4)}"/><Cell N="PinY" V="${cy.toFixed(4)}"/>
+    <Cell N="Width" V="${w.toFixed(4)}"/><Cell N="Height" V="${h.toFixed(4)}"/>
+    <Cell N="LocPinX" V="${(w / 2).toFixed(4)}"/><Cell N="LocPinY" V="${(h / 2).toFixed(4)}"/>
+    <Cell N="LineColor" V="${z.color}"/>
+    <Cell N="LinePattern" V="2"/>
+    <Cell N="Rounding" V="0.125"/>
+    <Cell N="VerticalAlign" V="0"/>
+    <Section N="Geometry" IX="0">
+     <Cell N="NoFill" V="1"/><Cell N="NoLine" V="0"/>
+     <Row T="RelMoveTo" IX="1"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>
+     <Row T="RelLineTo" IX="2"><Cell N="X" V="1"/><Cell N="Y" V="0"/></Row>
+     <Row T="RelLineTo" IX="3"><Cell N="X" V="1"/><Cell N="Y" V="1"/></Row>
+     <Row T="RelLineTo" IX="4"><Cell N="X" V="0"/><Cell N="Y" V="1"/></Row>
+     <Row T="RelLineTo" IX="5"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>
+    </Section>
+    <Text>${xmlEscape(z.label)}</Text>
+   </Shape>`;
+  }
 
   for (const n of state.nodes) {
     const id = shapeId++;

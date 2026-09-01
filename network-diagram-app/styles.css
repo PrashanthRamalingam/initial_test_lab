@@ -278,6 +278,37 @@ body {
 #btn-generate:hover { filter: brightness(1.08); }
 #btn-generate:disabled { opacity: 0.6; cursor: wait; }
 
+.bg-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.bg-picker input {
+  width: 30px;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+/* Zones (container boxes for DCs / sites) */
+.zone { cursor: move; }
+.zone-rect { fill-opacity: 0.07; stroke-width: 1.6; stroke-dasharray: 7 5; }
+.zone.selected .zone-rect { fill-opacity: 0.12; stroke-width: 2.4; stroke-dasharray: none; }
+.zone-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.zone-resize { cursor: nwse-resize; }
+
 /* Nodes */
 .node { cursor: move; }
 .node-box { fill: transparent; stroke: transparent; stroke-width: 2; rx: 10; }

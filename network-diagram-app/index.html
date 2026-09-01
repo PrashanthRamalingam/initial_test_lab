@@ -26,7 +26,12 @@
     <button id="btn-redo" title="Redo (Ctrl+Y)">↪️ Redo</button>
     <button id="btn-zoom-fit" title="Fit diagram in view">🔍 Fit</button>
     <button id="btn-arrange" title="Auto-arrange the diagram (uses the layout direction picker)">📐 Arrange</button>
+    <button id="btn-add-zone" title="Add a named container box (DC, site, VLAN zone)">⬛ Zone</button>
     <button id="btn-clear" title="Clear diagram">🗑️ Clear</button>
+    <label class="bg-picker" title="Canvas background color">🎨
+      <input id="bg-color" type="color" value="#fafcfe">
+    </label>
+    <button id="btn-bg-reset" title="Reset background to the theme default">↺</button>
   </div>
 
   <div class="tool-group">
@@ -62,6 +67,7 @@
       </defs>
       <rect id="grid-bg" width="100%" height="100%" fill="url(#grid-dots)"/>
       <g id="scene">
+        <g id="zone-layer"></g>
         <g id="edge-layer"></g>
         <g id="node-layer"></g>
         <g id="overlay-layer"></g>
