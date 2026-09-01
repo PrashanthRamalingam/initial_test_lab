@@ -113,7 +113,8 @@ function exportPdf() {
       format: [Math.max(wIn, 3), Math.max(hIn, 3)]
     });
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, wIn, hIn);
-    pdf.save('network-diagram.pdf');
+    // Route through downloadBlob so all exports share one download path.
+    downloadBlob(pdf.output('blob'), 'network-diagram.pdf');
   });
 }
 
