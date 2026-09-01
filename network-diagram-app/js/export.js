@@ -60,12 +60,16 @@ function buildExportSvg() {
       `<text x="${x}" y="${y + 4}" text-anchor="middle" font-size="11" fill="#475569">${xmlEscape(text)}</text>\n`;
   };
 
+  const fractions = edgeLabelFractions(state.edges);
   for (const e of state.edges) {
     const p = edgePath(e);
     if (!p) continue;
     const dash = e.style === 'dashed' ? ' stroke-dasharray="7 5"' : '';
     out += `<path d="${p.d}" fill="none" stroke="#64748b" stroke-width="2"${dash}/>\n`;
-    if (e.label) out += labelAt(p.mid.x, p.mid.y, e.label);
+    if (e.label) {
+      const at = p.lerp ? p.lerp(fractions[e.id] ?? 0.5) : p.mid;
+      out += labelAt(at.x, at.y, e.label);
+    }
     if (e.fromLabel) out += labelAt(p.endA.x, p.endA.y, e.fromLabel);
     if (e.toLabel) out += labelAt(p.endB.x, p.endB.y, e.toLabel);
   }

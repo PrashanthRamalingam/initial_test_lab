@@ -139,6 +139,7 @@ function edgePath(e) {
       return {
         d: `M ${p1.x} ${p1.y} L ${p1.x} ${midY} L ${p2.x} ${midY} L ${p2.x} ${p2.y}`,
         mid: { x: (p1.x + p2.x) / 2, y: midY },
+        lerp: t => ({ x: p1.x + (p2.x - p1.x) * t, y: midY }),
         endA: { x: p1.x, y: p1.y + 22 * Math.sign(midY - p1.y || 1) },
         endB: { x: p2.x, y: p2.y + 22 * Math.sign(midY - p2.y || -1) }
       };
@@ -149,6 +150,7 @@ function edgePath(e) {
     return {
       d: `M ${p1.x} ${p1.y} L ${midX} ${p1.y} L ${midX} ${p2.y} L ${p2.x} ${p2.y}`,
       mid: { x: midX, y: (p1.y + p2.y) / 2 },
+      lerp: t => ({ x: midX, y: p1.y + (p2.y - p1.y) * t }),
       endA: { x: p1.x + 26 * Math.sign(midX - p1.x || 1), y: p1.y },
       endB: { x: p2.x + 26 * Math.sign(midX - p2.x || -1), y: p2.y }
     };
@@ -159,9 +161,22 @@ function edgePath(e) {
   return {
     d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`,
     mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+    lerp: t => ({ x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t }),
     endA: { x: p1.x + ux * 26, y: p1.y + uy * 26 },
     endB: { x: p2.x - ux * 26, y: p2.y - uy * 26 }
   };
+}
+
+// Links converging on one device would stack their labels on top of each
+// other; slide each label a little along its own line instead.
+function edgeLabelFractions(edges) {
+  const seen = {};
+  const fractions = {};
+  for (const e of edges) {
+    const i = (seen[e.from] = (seen[e.from] || 0) + 1) - 1;
+    fractions[e.id] = 0.5 + ((i % 3) - 1) * 0.13;
+  }
+  return fractions;
 }
 
 function renderZones() {
@@ -192,6 +207,7 @@ function zoneMembers(z) {
 
 function renderEdges() {
   edgeLayer.innerHTML = '';
+  const fractions = edgeLabelFractions(state.edges);
   for (const e of state.edges) {
     const path = edgePath(e);
     if (!path) continue;
@@ -233,7 +249,10 @@ function renderEdges() {
         } catch (_) { /* detached during re-render */ }
       });
     };
-    if (e.label) addLabel(path.mid.x, path.mid.y, e.label);
+    if (e.label) {
+      const at = path.lerp ? path.lerp(fractions[e.id] ?? 0.5) : path.mid;
+      addLabel(at.x, at.y, e.label);
+    }
     if (e.fromLabel) addLabel(path.endA.x, path.endA.y, e.fromLabel);
     if (e.toLabel) addLabel(path.endB.x, path.endB.y, e.toLabel);
     edgeLayer.appendChild(g);
@@ -712,13 +731,28 @@ function renderProperties() {
   if (selection.kind === 'node') {
     const n = nodeById(selection.id);
     if (!n) { panel.innerHTML = ''; return; }
+    const typeKeys = ICON_ORDER.concat(Object.keys(state.customIcons || {}))
+      .filter(t => NETWORK_ICONS[t]);
+    if (!typeKeys.includes(n.type)) typeKeys.unshift(n.type);
     panel.innerHTML = `
       <h3>${iconFor(n.type).label}</h3>
       <label>Label <input id="p-label" type="text" value="${escapeHtml(n.label)}"></label>
+      <label>Device type
+        <select id="p-type">${typeKeys.map(t =>
+          `<option value="${t}"${t === n.type ? ' selected' : ''}>${escapeHtml(iconFor(t).label)}</option>`
+        ).join('')}</select></label>
       <label>Details (IP, VLAN, model…) <input id="p-sub" type="text" value="${escapeHtml(n.sub || '')}"></label>
       <label>Color <input id="p-color" type="color" value="${n.color}"></label>
       <button id="p-delete" class="danger">Delete node</button>`;
     $('#p-label').addEventListener('change', ev => { pushUndo(); n.label = ev.target.value; render(); });
+    $('#p-type').addEventListener('change', ev => {
+      pushUndo();
+      const previous = iconFor(n.type);
+      n.type = ev.target.value;
+      // Keep a hand-picked color; refresh one that was the type default.
+      if (n.color === previous.color) n.color = iconFor(n.type).color;
+      render();
+    });
     $('#p-sub').addEventListener('change', ev => { pushUndo(); n.sub = ev.target.value.trim(); render(); });
     $('#p-color').addEventListener('input', ev => { n.color = ev.target.value; renderNodes(); saveLocal(); });
     $('#p-delete').addEventListener('click', deleteSelection);

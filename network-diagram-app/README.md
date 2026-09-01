@@ -115,7 +115,34 @@ All exports derive from the same state, so they match the canvas exactly:
 | **Visio (.vsdx)** | A `.vsdx` is just a ZIP of XML parts (an OPC package, like `.docx`). `buildVsdx()` assembles the minimal part set — `[Content_Types].xml`, relationship files, `pages.xml`, `page1.xml` — with [JSZip](https://stuk.github.io/jszip/). Nodes become colored rounded rectangles with labels, edges become line shapes (Visio measures in inches from the bottom-left, so coordinates are converted and Y-flipped). Visio can't render our SVG icons natively, so this export favors editability over looks. |
 | **draw.io** | `buildDrawioXml()` emits diagrams.net's `mxGraphModel` XML. This is the best *editable* interchange format: [diagrams.net](https://app.diagrams.net) opens it directly and can itself re-export to `.vsdx` with higher fidelity than our minimal writer. |
 
-### 5. Fully offline
+### 5. Mermaid / arrow syntax
+
+Structured topology definitions are parsed **exactly** — no guessing, no
+AI. Paste (or type) Mermaid flowchart syntax and NetDraw builds precisely
+those nodes and links:
+
+```
+flowchart TD
+subgraph DMZ
+  FC01[NGA-FC01<br/>10.24.247.21] -->|"Bond1 - External"| DMZSW
+  FC02 -.-> DMZSW
+end
+DMZSW --> RB01 & RB02
+```
+
+Supported: `graph`/`flowchart` headers, node shapes (`A[..]` `A(..)`
+`A((..))` `A[(..)]` `A{..}` `A{{..}}` `A[[..]]`), edge labels
+(`-->|label|` and `-- label -->`), dotted (`-.->`) and thick (`==>`)
+links, chains (`A --> B --> C`), fan-out groups (`A --> B & C`),
+`subgraph` blocks (which become zones), `<br/>` in labels (second line
+becomes the device's detail line), and `%%` comments. `classDef`,
+`style`, `click` and `linkStyle` lines are ignored rather than drawn.
+
+Device icons are inferred from each node's name and label; anything
+inferred wrongly is one click to fix with the **Device type** dropdown in
+the properties panel.
+
+### 6. Fully offline
 
 The app is a PWA: a service worker precaches every asset (stamped with the
 deploy commit for clean upgrades), so after one visit it loads and works
@@ -130,7 +157,7 @@ Annotation extras that round out hand-drawn parity: **📝 Notes**
 **per-end connection labels** (Eth8/4 at one end of a wire, Te0/1/4 at
 the other) editable in the properties panel.
 
-### 6. Importing vendor icons (Cisco, Azure, AWS…)
+### 7. Importing vendor icons (Cisco, Azure, AWS…)
 
 The official vendor icon packs are licensed for *you* to use in *your*
 diagrams — bundling them into this repo would redistribute them, which
