@@ -280,7 +280,36 @@ function parseInstruction(text) {
   const groups = [];
   for (const sentence of sentences) {
     const zone = detectZone(sentence);
-    const segs = splitGroups(sentence).map(parseSegment).filter(g => g.entries.length > 0);
+
+    // Segments with link terms but no devices ("…, interfaces labeled
+    // Eth8/3 route downwards through PC-7") describe the connection of the
+    // neighboring device group — fold their terms into it instead of
+    // dropping them.
+    const rawSegs = splitGroups(sentence).map(parseSegment);
+    const segs = [];
+    let pendingTerms = [];
+    for (const g of rawSegs) {
+      if (!g.entries.length) {
+        if (segs.length) {
+          const p = segs[segs.length - 1];
+          p.linkTerms = [...new Set(p.linkTerms.concat(g.linkTerms))];
+        } else {
+          pendingTerms.push(...g.linkTerms);
+        }
+        continue;
+      }
+      if (pendingTerms.length) {
+        g.linkTerms = [...new Set(pendingTerms.concat(g.linkTerms))];
+        pendingTerms = [];
+      }
+      segs.push(g);
+    }
+
+    // "…which have a link between them": connect the devices named in
+    // this sentence to each other.
+    if (/\blink(?:s|ed)?\s+between\s+them\b|\blinked\s+together\b|\binterconnected\b/i.test(sentence) && segs.length) {
+      segs[segs.length - 1].peerLink = true;
+    }
     if (zone && zone.pair && segs.length >= 2) {
       segs[0].zoneLabel = 'DC 1';
       segs[segs.length - 1].zoneLabel = 'DC 2';
@@ -343,7 +372,22 @@ function buildFromGroups(groups) {
 
       for (const name of entry.names) {
         const key = name.toLowerCase();
-        if (!registry.has(key)) registry.set(key, makeNode(entry.type, name));
+        if (!registry.has(key)) {
+          // An abbreviated mention of an already-known device maps to it:
+          // "LGA-SC01" in an annotation is NGA-SC01-LGA, not a new switch
+          // (its name tokens are a subset of the existing hostname's).
+          const toks = key.split(/[-.]/).filter(Boolean);
+          let match = null;
+          for (const [k, node] of registry) {
+            if (k.startsWith('type:')) continue;
+            const ktoks = k.split(/[-.]/).filter(Boolean);
+            const small = toks.length <= ktoks.length ? toks : ktoks;
+            const big = new Set(toks.length <= ktoks.length ? ktoks : toks);
+            if (small.length >= 2 && toks.length !== ktoks.length &&
+                small.every(t => big.has(t))) { match = node; break; }
+          }
+          registry.set(key, match || makeNode(entry.type, name));
+        }
         place(registry.get(key));
       }
 
@@ -378,6 +422,21 @@ function buildFromGroups(groups) {
     if (layer.conn.length) {
       layers.push({ layer, linkTerms: group.linkTerms, chainStart: group.chainStart });
     }
+
+    // "…which have a link between them": connect this group's devices to
+    // each other (the HA pair link between two switches).
+    if (group.peerLink && layer.conn.length >= 2) {
+      for (let i = 0; i + 1 < layer.conn.length && edges.length < MAX_EDGES; i++) {
+        const key = [layer.conn[i].id, layer.conn[i + 1].id].sort().join('>');
+        if (!edgeKeys.has(key)) {
+          edgeKeys.add(key);
+          edges.push({
+            id: uid('e'), from: layer.conn[i].id, to: layer.conn[i + 1].id,
+            label: '', style: 'solid', shape: 'straight'
+          });
+        }
+      }
+    }
   }
 
   // Connect consecutive layers. The label comes from the source group's
@@ -389,8 +448,11 @@ function buildFromGroups(groups) {
   // connected best-guess beats a disconnected scatter.
   let respectChainStart = true;
   let usedFallbackChain = false;
+  let chainEdges = 0;
   connectLayers();
-  if (!edges.length && layers.length > 1) {
+  // Peer links ("link between them") don't count as connectivity here —
+  // narrative text still needs the sequential fallback.
+  if (chainEdges === 0 && layers.length > 1) {
     respectChainStart = false;
     usedFallbackChain = true;
     connectLayers();
@@ -400,12 +462,19 @@ function buildFromGroups(groups) {
   for (let i = 0; i + 1 < layers.length; i++) {
     if (respectChainStart && layers[i + 1].chainStart) continue;
     const a = layers[i].layer.conn, b = layers[i + 1].layer.conn;
+    // The label comes from the source group's terms ("via fiber to …");
+    // when the source has none, the target group's own terms describe its
+    // incoming connection ("pass through PC-5 … into NGA-RW01") — pull
+    // them once so they aren't reused downstream.
     let terms = layers[i].linkTerms;
-    if (i + 2 === layers.length && layers[i + 1].linkTerms.length) {
-      terms = [...new Set(terms.concat(layers[i + 1].linkTerms))];
+    if (!terms.length && layers[i + 1].linkTerms.length && !layers[i + 1].termsPulled) {
+      terms = layers[i + 1].linkTerms;
+      layers[i + 1].termsPulled = true;
     }
     // At most two terms on a label — more turns into unreadable glue.
     const label = terms.slice(0, 2).join(', ').slice(0, 40);
+    // Routing protocols and tunnels are logical links — draw them dashed.
+    const style = /\b(bgp|ospf|eigrp|static|vpn|tunnel|logical)\b/i.test(label) ? 'dashed' : 'solid';
     const connect = (na, nb, shape) => {
       if (na.id === nb.id || edges.length >= MAX_EDGES) return;
       // Undirected dedupe: links carry no arrowheads, so A→B and B→A are
@@ -420,7 +489,8 @@ function buildFromGroups(groups) {
         return;
       }
       edgeKeys.add(key);
-      edges.push({ id: uid('e'), from: na.id, to: nb.id, label, style: 'solid', shape });
+      edges.push({ id: uid('e'), from: na.id, to: nb.id, label, style, shape });
+      chainEdges++;
     };
     if (a.length === b.length && a.length > 1) {
       for (let j = 0; j < a.length; j++) connect(a[j], b[j], 'straight');
