@@ -100,6 +100,7 @@ const LINK_VOCAB = [
   /\blacp\b/gi,
   /\bport[-\s]?channel\s*\d*(?:\.\d+)?\b/gi,
   /\bpo\d+(?:\.\d+)?\b/gi,
+  /\bpc-\d+(?:\.\d+)?\b/gi,
   /\b(?:eth|te|gi|fa|hu|xe)\d+(?:[\/.]\d+)*\b/gi,
   /\b\d{1,3}\s?(?:gbps|mbps|gb|g)\b/gi,
   /\bmpls\b/gi,
@@ -165,8 +166,9 @@ function parseSegment(seg) {
     }
   }
 
-  // Device mentions, longest match wins at any position.
-  const found = [];
+  // Device mentions, longest match wins at any position. A mention inside
+  // a link term is not a device: "PC-501" is a port channel, not a PC.
+  let found = [];
   for (const { type, re } of DEVICE_VOCAB) {
     re.lastIndex = 0;
     let m;
@@ -174,6 +176,8 @@ function parseSegment(seg) {
       found.push({ type, index: m.index, len: m[0].length });
     }
   }
+  found = found.filter(f =>
+    !linkSpans.some(l => f.index < l.index + l.len && l.index < f.index + f.len));
   found.sort((a, b) => a.index - b.index || b.len - a.len);
   const mentions = [];
   let coveredTo = -1;
@@ -222,13 +226,27 @@ function parseSegment(seg) {
     const tok = hm[0];
     if (linkSpans.some(l => hm.index >= l.index && hm.index < l.index + l.len)) continue;
     if (LINK_VOCAB.some(re => new RegExp('^(?:' + re.source + ')$', 'i').test(tok))) continue;
+    // Attach the hostname only to an IMMEDIATELY adjacent device word
+    // ("router bprt-01-rt01", "swg-01 switch"). A hostname merely near
+    // some other device word keeps its own inferred type — in "Peer
+    // between NGA-RW01 and Azure", NGA-RW01 is a router, not a cloud.
     let best = null, bestD = Infinity;
     for (const mention of mentions) {
-      const d = Math.abs(mention.index - hm.index);
-      if (d < bestD) { bestD = d; best = mention; }
+      const gap = mention.index >= hm.index
+        ? mention.index - (hm.index + tok.length)
+        : hm.index - (mention.index + mention.len);
+      if (gap < bestD) { bestD = gap; best = mention; }
     }
-    if (best && bestD <= 40) best.names.push(tok);
+    if (best && bestD <= 12) best.names.push(tok);
     else standalone.push({ type: inferTypeFromHostname(tok), index: hm.index, count: 1, names: [tok] });
+  }
+
+  // "two switches: NGA-SC01-LGA ... and NGA-SC02-LGA": the far hostname
+  // became a standalone entry, but it is one of the two — count it against
+  // the mention so no extra unnamed switch appears.
+  for (const s of standalone) {
+    const m = mentions.find(x => x.type === s.type && x.count > x.names.length);
+    if (m) m.count--;
   }
 
   const entries = mentions.concat(standalone).sort((a, b) => a.index - b.index);
@@ -332,7 +350,21 @@ function buildFromGroups(groups) {
       const unnamed = Math.max(0, entry.count - entry.names.length);
       for (let i = 0; i < unnamed && nodes.length < MAX_NODES; i++) {
         if (unnamed === 1 && SINGLETON_TYPES.has(entry.type)) {
-          const key = 'type:' + entry.type + (brand ? ':' + brand : '');
+          // Generic and branded mentions of the same singleton merge:
+          // "cloud" and "Azure" in one text are the same node (upgraded to
+          // the brand name). Two DIFFERENT brands (AWS vs Azure) stay
+          // separate nodes.
+          let key = 'type:' + entry.type;
+          const existing = registry.get(key);
+          if (existing) {
+            const brandValues = Object.values(BRAND_LABELS);
+            const existingBrand = brandValues.includes(existing.label) ? existing.label : null;
+            if (brand && existingBrand && existingBrand !== brand) {
+              key = 'type:' + entry.type + ':' + brand;
+            } else if (brand && !existingBrand) {
+              existing.label = brand;
+            }
+          }
           if (!registry.has(key)) registry.set(key, makeNode(entry.type, baseLabel));
           place(registry.get(key));
         } else {
@@ -351,18 +383,42 @@ function buildFromGroups(groups) {
   // Connect consecutive layers. The label comes from the source group's
   // link terms ("via fiber to …"); trailing terms on the final group label
   // the connection into it ("… to swg-01 intra link").
+  // Groups chain within a sentence. If that yields no connections at all
+  // (narrative text where sentences refer back to each other — "These
+  // connect to…"), fall back to chaining all groups sequentially: a
+  // connected best-guess beats a disconnected scatter.
+  let respectChainStart = true;
+  let usedFallbackChain = false;
+  connectLayers();
+  if (!edges.length && layers.length > 1) {
+    respectChainStart = false;
+    usedFallbackChain = true;
+    connectLayers();
+  }
+
+  function connectLayers() {
   for (let i = 0; i + 1 < layers.length; i++) {
-    if (layers[i + 1].chainStart) continue;
+    if (respectChainStart && layers[i + 1].chainStart) continue;
     const a = layers[i].layer.conn, b = layers[i + 1].layer.conn;
     let terms = layers[i].linkTerms;
     if (i + 2 === layers.length && layers[i + 1].linkTerms.length) {
       terms = [...new Set(terms.concat(layers[i + 1].linkTerms))];
     }
-    const label = terms.join(', ').slice(0, 40);
+    // At most two terms on a label — more turns into unreadable glue.
+    const label = terms.slice(0, 2).join(', ').slice(0, 40);
     const connect = (na, nb, shape) => {
       if (na.id === nb.id || edges.length >= MAX_EDGES) return;
-      const key = na.id + '>' + nb.id;
-      if (edgeKeys.has(key)) return;
+      // Undirected dedupe: links carry no arrowheads, so A→B and B→A are
+      // the same line. When the duplicate carries a label, keep it.
+      const key = [na.id, nb.id].sort().join('>');
+      if (edgeKeys.has(key)) {
+        if (label) {
+          const existing = edges.find(e =>
+            (e.from === na.id && e.to === nb.id) || (e.from === nb.id && e.to === na.id));
+          if (existing && !existing.label) existing.label = label;
+        }
+        return;
+      }
       edgeKeys.add(key);
       edges.push({ id: uid('e'), from: na.id, to: nb.id, label, style: 'solid', shape });
     };
@@ -373,6 +429,8 @@ function buildFromGroups(groups) {
       for (const na of a) for (const nb of b) connect(na, nb, shape);
     }
   }
+  }
+
   // Zone membership as [{label, nodes}] in first-seen order.
   const zoneGroups = [];
   for (const [nodeId, label] of zoneOf) {
@@ -382,7 +440,7 @@ function buildFromGroups(groups) {
     if (node) zg.nodes.push(node);
   }
   return {
-    nodes, edges, zoneGroups,
+    nodes, edges, zoneGroups, usedFallbackChain,
     layers: layers.map(l => l.layer.fresh).filter(f => f.length)
   };
 }
@@ -545,9 +603,12 @@ function applyGenerated(nodes, edges, sourceText, note, zones) {
 function generateFromText(text, note) {
   const parsed = parseInstruction(text);
   if (!parsed) return false;
-  const { nodes, edges, layers, zoneGroups } = buildFromGroups(parsed.groups);
+  const { nodes, edges, layers, zoneGroups, usedFallbackChain } = buildFromGroups(parsed.groups);
   if (!nodes.length) return false;
-  layoutLayers(layers);
+  // Narrative text (fallback-chained) has unreliable group order — lay it
+  // out by graph connectivity instead of by order of mention.
+  if (usedFallbackChain) layoutGraph(nodes, edges);
+  else layoutLayers(layers);
   applyGenerated(nodes, edges, text, note, makeZones(zoneGroups));
   return true;
 }
@@ -584,8 +645,18 @@ function handleGenerate() {
 }
 
 document.getElementById('btn-generate').addEventListener('click', handleGenerate);
-document.getElementById('gen-input').addEventListener('keydown', ev => {
-  if (ev.key === 'Enter') handleGenerate();
+const genInput = document.getElementById('gen-input');
+genInput.addEventListener('keydown', ev => {
+  // Enter generates; Shift+Enter inserts a newline (multiline configs).
+  if (ev.key === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault();
+    handleGenerate();
+  }
+});
+// Grow the box with its content, up to the CSS max-height.
+genInput.addEventListener('input', () => {
+  genInput.style.height = 'auto';
+  genInput.style.height = Math.min(genInput.scrollHeight, 120) + 'px';
 });
 
 const dirSelect = document.getElementById('gen-dir');

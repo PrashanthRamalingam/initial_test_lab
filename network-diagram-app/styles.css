@@ -251,6 +251,9 @@ body {
   color: var(--text);
   padding: 4px 6px;
   min-width: 0;
+  resize: none;
+  max-height: 120px;
+  line-height: 1.4;
 }
 #gen-input::placeholder { color: var(--muted); opacity: 0.8; }
 #gen-dir {
