@@ -130,6 +130,23 @@ Annotation extras that round out hand-drawn parity: **📝 Notes**
 **per-end connection labels** (Eth8/4 at one end of a wire, Te0/1/4 at
 the other) editable in the properties panel.
 
+### 6. Importing vendor icons (Cisco, Azure, AWS…)
+
+The official vendor icon packs are licensed for *you* to use in *your*
+diagrams — bundling them into this repo would redistribute them, which
+their licenses don't allow. So NetDraw imports them instead: download
+the pack from the vendor (Cisco's topology icons from cisco.com, the
+Azure/AWS architecture icon sets from their docs sites), unzip it, and
+use the **📥 Icons** toolbar button to load the SVG files. Imported
+icons:
+
+- appear under an "Imported" palette category, named from the filename;
+- are sanitized (scripts/handlers stripped) and normalized to the icon
+  grid;
+- travel inside saved diagram files and share links, and render in all
+  five exports;
+- are understood by the text generator by name ("two nexus 9300 …").
+
 ## Running it
 
 ```bash
