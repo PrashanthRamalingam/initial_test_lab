@@ -115,6 +115,21 @@ All exports derive from the same state, so they match the canvas exactly:
 | **Visio (.vsdx)** | A `.vsdx` is just a ZIP of XML parts (an OPC package, like `.docx`). `buildVsdx()` assembles the minimal part set — `[Content_Types].xml`, relationship files, `pages.xml`, `page1.xml` — with [JSZip](https://stuk.github.io/jszip/). Nodes become colored rounded rectangles with labels, edges become line shapes (Visio measures in inches from the bottom-left, so coordinates are converted and Y-flipped). Visio can't render our SVG icons natively, so this export favors editability over looks. |
 | **draw.io** | `buildDrawioXml()` emits diagrams.net's `mxGraphModel` XML. This is the best *editable* interchange format: [diagrams.net](https://app.diagrams.net) opens it directly and can itself re-export to `.vsdx` with higher fidelity than our minimal writer. |
 
+### 5. Fully offline
+
+The app is a PWA: a service worker precaches every asset (stamped with the
+deploy commit for clean upgrades), so after one visit it loads and works
+with no internet at all, and the browser offers "Install app" /
+"Add to Home screen". Everything is local: diagrams autosave to
+localStorage, and **🔗 Share** packs the whole diagram, gzipped, into the
+URL itself (`#d=…`) — no server ever stores anything.
+
+Annotation extras that round out hand-drawn parity: **📝 Notes**
+(free-text blocks, like a drawing's ROUTING/VLAN panels), per-node
+**detail lines** (IPs are auto-extracted from generated text), and
+**per-end connection labels** (Eth8/4 at one end of a wire, Te0/1/4 at
+the other) editable in the properties panel.
+
 ## Running it
 
 ```bash
