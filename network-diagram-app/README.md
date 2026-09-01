@@ -53,7 +53,32 @@ line, straight and right-angle (elbow) edge routing, solid/dashed lines,
 edge labels, double-click rename, per-node colors, wheel zoom around the
 cursor, canvas panning, fit-to-view, and keyboard shortcuts.
 
-### 3. Exports
+### 3. Text-to-diagram (the message box)
+
+Type a description into the message box at the bottom of the canvas —
+
+> connect two routers to data center plus two firewall
+
+— and `js/generate.js` builds the diagram (replacing the current one;
+undo restores it). It is a deterministic parser, so it works offline with
+no API key:
+
+1. The sentence is split into device **groups** at connector words
+   (`to`, `plus`, `and`, `then`, `with`, `,`, `->`).
+2. Each group is scanned against a synonym vocabulary (`router`, `fw`,
+   `data center`, `access point`, `pc`, …) with optional counts
+   ("two routers", "3 switches", "a firewall").
+3. Consecutive groups get connected — pairwise when the counts match,
+   otherwise everything-to-everything — and laid out as centered rows,
+   top to bottom.
+
+The example above yields: Router 1 & 2 → Data Center → Firewall 1 & 2.
+`window.aiGenerate` is a hook for a smarter backend: if it is defined, it
+receives any sentence the parser can't handle (the hosted live-preview
+artifact plugs Claude in there; a self-hosted deployment could call the
+Claude API server-side the same way).
+
+### 4. Exports
 
 All exports derive from the same state, so they match the canvas exactly:
 

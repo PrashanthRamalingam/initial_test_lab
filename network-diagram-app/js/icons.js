@@ -159,6 +159,22 @@ const NETWORK_ICONS = {
         <circle cx="45" cy="21.5" r="1.8"/><circle cx="45" cy="32" r="1.8"/><circle cx="45" cy="42.5" r="1.8"/>
       </g>`
   },
+  datacenter: {
+    label: 'Data Center',
+    color: '#1e40af',
+    svg: `
+      <path d="M8 24 L32 10 L56 24 v4 H8 z" fill="currentColor"/>
+      <rect x="12" y="28" width="40" height="26" fill="currentColor" opacity="0.85"/>
+      <g fill="#ffffff" opacity="0.9">
+        <rect x="17" y="32" width="8" height="18" rx="1"/>
+        <rect x="28" y="32" width="8" height="18" rx="1"/>
+        <rect x="39" y="32" width="8" height="18" rx="1"/>
+      </g>
+      <g stroke="currentColor" stroke-width="1.5">
+        <path d="M18.5 36 h5 M18.5 40 h5 M29.5 36 h5 M29.5 40 h5 M40.5 36 h5 M40.5 40 h5"/>
+      </g>
+      <rect x="8" y="54" width="48" height="3" rx="1.5" fill="currentColor"/>`
+  },
   printer: {
     label: 'Printer',
     color: '#57534e',
@@ -181,7 +197,7 @@ const NETWORK_ICONS = {
 
 // Order shown in the palette.
 const ICON_ORDER = [
-  'internet', 'cloud', 'router', 'switch', 'firewall', 'loadbalancer',
-  'server', 'database', 'storage', 'vpn', 'wifi',
+  'internet', 'cloud', 'datacenter', 'router', 'switch', 'firewall',
+  'loadbalancer', 'server', 'database', 'storage', 'vpn', 'wifi',
   'workstation', 'laptop', 'phone', 'printer', 'user'
 ];
