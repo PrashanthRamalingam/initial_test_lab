@@ -326,38 +326,77 @@ function buildFromGroups(groups) {
   return { nodes, edges, layers: layers.map(l => l.layer) };
 }
 
-// Place layers as centered rows, top to bottom. Wide layers wrap into
-// sub-rows of six so huge fan-outs stay on screen.
+// --- Layout direction: top-down (vertical) or left-right (horizontal).
+let layoutDir = 'vertical';
+try { layoutDir = localStorage.getItem('netdraw-layout-dir') || 'vertical'; } catch (_) {}
+
+function setLayoutDir(dir) {
+  layoutDir = dir === 'horizontal' ? 'horizontal' : 'vertical';
+  try { localStorage.setItem('netdraw-layout-dir', layoutDir); } catch (_) {}
+}
+
+// Place layers as centered rows (vertical) or columns (horizontal). Wide
+// layers wrap into sub-rows of six so huge fan-outs stay on screen.
 function layoutLayers(layers) {
-  const X_GAP = 170, ROW_GAP = 150, LAYER_GAP = 190, PER_ROW = 6, CENTER_X = 420;
-  let y = 40;
+  const CROSS_GAP = 170, ROW_GAP = 150, PER_ROW = 6, CENTER = 420;
+  const MAIN_GAP = layoutDir === 'horizontal' ? 250 : 190;
+  let main = 40;
   for (const layer of layers) {
     const rows = Math.ceil(layer.length / PER_ROW);
     for (let r = 0; r < rows; r++) {
       const rowNodes = layer.slice(r * PER_ROW, (r + 1) * PER_ROW);
-      const rowWidth = (rowNodes.length - 1) * X_GAP;
+      const crossWidth = (rowNodes.length - 1) * CROSS_GAP;
       rowNodes.forEach((node, i) => {
-        node.x = snap(CENTER_X - rowWidth / 2 + i * X_GAP - NODE_W / 2);
-        node.y = snap(y + r * ROW_GAP);
+        const cross = CENTER - crossWidth / 2 + i * CROSS_GAP;
+        if (layoutDir === 'horizontal') {
+          node.x = snap(main + r * ROW_GAP);
+          node.y = snap(cross - NODE_H / 2);
+        } else {
+          node.x = snap(cross - NODE_W / 2);
+          node.y = snap(main + r * ROW_GAP);
+        }
       });
     }
-    y += (rows - 1) * ROW_GAP + LAYER_GAP;
+    main += (rows - 1) * ROW_GAP + MAIN_GAP;
   }
 }
 
-// Layout for an arbitrary graph (used by the AI path): BFS layering.
+// Layout for an arbitrary graph (used by the AI path and Rearrange):
+// longest-path layering, but PEER edges are excluded from depth. A peer
+// edge joins two nodes that share a common parent (an HA switch pair with
+// a link between them) or that point at each other — counting those for
+// depth collapses a diamond topology into a single overlapping chain.
 function layoutGraph(nodes, edges) {
+  const preds = {};
+  const byId = {};
+  for (const n of nodes) { preds[n.id] = new Set(); byId[n.id] = n; }
+  for (const e of edges) if (preds[e.to]) preds[e.to].add(e.from);
+
+  const isPeer = (e) => {
+    if (edges.some(o => o.from === e.to && o.to === e.from)) return true;
+    // Same device type + a shared parent = an HA pair (switch↔switch under
+    // one cloud), not a hierarchy step. Different types (switch→router)
+    // are hierarchy even when they share a parent.
+    if (!byId[e.from] || !byId[e.to] || byId[e.from].type !== byId[e.to].type) return false;
+    for (const p of preds[e.from] || []) {
+      if (p !== e.from && p !== e.to && preds[e.to] && preds[e.to].has(p)) return true;
+    }
+    return false;
+  };
+  const layerEdges = edges.filter(e => !isPeer(e));
+
   const layerOf = {};
   const incoming = {};
   for (const n of nodes) incoming[n.id] = 0;
-  for (const e of edges) if (e.to in incoming) incoming[e.to]++;
-  let frontier = nodes.filter(n => incoming[n.id] === 0);
-  if (!frontier.length && nodes.length) frontier = [nodes[0]];
-  frontier.forEach(n => { layerOf[n.id] = 0; });
+  for (const e of layerEdges) if (e.to in incoming) incoming[e.to]++;
+  let sources = nodes.filter(n => incoming[n.id] === 0);
+  if (!sources.length && nodes.length) sources = [nodes[0]];
+  sources.forEach(n => { layerOf[n.id] = 0; });
+
   let changed = true, guard = 0;
   while (changed && guard++ < nodes.length + 2) {
     changed = false;
-    for (const e of edges) {
+    for (const e of layerEdges) {
       if (layerOf[e.from] !== undefined) {
         const want = layerOf[e.from] + 1;
         if (layerOf[e.to] === undefined || layerOf[e.to] < want) {
@@ -366,13 +405,33 @@ function layoutGraph(nodes, edges) {
         }
       }
     }
+    // A node only reachable through a peer edge still needs a home: put it
+    // beside its peer.
+    for (const e of edges) {
+      if (layerOf[e.from] !== undefined && layerOf[e.to] === undefined) {
+        layerOf[e.to] = isPeer(e) ? layerOf[e.from] : layerOf[e.from] + 1;
+        changed = true;
+      }
+    }
   }
+
   const layers = [];
   for (const n of nodes) {
     const li = layerOf[n.id] || 0;
     (layers[li] = layers[li] || []).push(n);
   }
   layoutLayers(layers.filter(Boolean));
+}
+
+// Re-run auto-layout on whatever is on the canvas (after manual edits, or
+// to flip between vertical and horizontal).
+function rearrange() {
+  if (!state.nodes.length) return;
+  pushUndo();
+  layoutGraph(state.nodes, state.edges);
+  render();
+  document.getElementById('btn-zoom-fit').click();
+  setStatus(`Rearranged ${layoutDir === 'horizontal' ? 'left-to-right' : 'top-down'}.`);
 }
 
 // Apply a generated diagram: replace current content (undo restores it).
@@ -433,3 +492,11 @@ document.getElementById('btn-generate').addEventListener('click', handleGenerate
 document.getElementById('gen-input').addEventListener('keydown', ev => {
   if (ev.key === 'Enter') handleGenerate();
 });
+
+const dirSelect = document.getElementById('gen-dir');
+dirSelect.value = layoutDir;
+dirSelect.addEventListener('change', () => {
+  setLayoutDir(dirSelect.value);
+  rearrange(); // flip the current diagram immediately; undo restores it
+});
+document.getElementById('btn-arrange').addEventListener('click', rearrange);

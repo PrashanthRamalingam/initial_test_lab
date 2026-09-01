@@ -76,7 +76,6 @@ function renderPng(scale = 2) {
   return new Promise((resolve, reject) => {
     const b = diagramBounds();
     const svgStr = buildExportSvg();
-    const url = URL.createObjectURL(new Blob([svgStr], { type: 'image/svg+xml' }));
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
@@ -86,17 +85,21 @@ function renderPng(scale = 2) {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(url);
       resolve({ canvas, w: b.w, h: b.h });
     };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG rasterization failed')); };
-    img.src = url;
+    img.onerror = () => reject(new Error('SVG rasterization failed'));
+    // A data: URI, not a blob: URL — sandboxed hosts (like the artifact
+    // viewer) commonly block blob: images via CSP, which would make PNG
+    // and PDF export fail with no visible error.
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
   });
 }
 
 function exportPng() {
-  renderPng().then(({ canvas }) =>
-    canvas.toBlob(blob => downloadBlob(blob, 'network-diagram.png'), 'image/png'));
+  renderPng()
+    .then(({ canvas }) =>
+      canvas.toBlob(blob => downloadBlob(blob, 'network-diagram.png'), 'image/png'))
+    .catch(() => setStatus('PNG export failed — the SVG export still works.'));
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +118,7 @@ function exportPdf() {
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, wIn, hIn);
     // Route through downloadBlob so all exports share one download path.
     downloadBlob(pdf.output('blob'), 'network-diagram.pdf');
-  });
+  }).catch(() => setStatus('PDF export failed — the SVG export still works.'));
 }
 
 // ---------------------------------------------------------------------------
