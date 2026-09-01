@@ -23,6 +23,7 @@
   --danger-text: #b91c1c;
   --kbd-bg: #eef2f7;
   --shadow: rgba(15, 23, 42, 0.12);
+  --icon-boost: none;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -47,9 +48,11 @@
     --danger-text: #f0a3a3;
     --kbd-bg: #1c2636;
     --shadow: rgba(2, 8, 20, 0.4);
+    --icon-boost: brightness(1.65) saturate(0.85);
   }
 }
 :root[data-theme="dark"] {
+  --icon-boost: brightness(1.65) saturate(0.85);
   --bg: #0f1520;
   --canvas: #121a27;
   --panel: #161e2c;
@@ -318,6 +321,10 @@ body {
 .note.selected .note-rect { stroke-width: 2.2; fill-opacity: 0.9; }
 .note-text { font-size: 12.5px; user-select: none; -webkit-user-select: none; }
 .note-resize { cursor: nwse-resize; }
+
+/* Line-art icons are muted enterprise colors tuned for light paper;
+   lift them on dark canvases (exports render on white and are unaffected). */
+.node-icon, .palette-item svg { filter: var(--icon-boost); }
 
 /* Nodes */
 .node { cursor: move; }
