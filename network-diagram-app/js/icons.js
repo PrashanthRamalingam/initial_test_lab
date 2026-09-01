@@ -128,6 +128,22 @@ const NETWORK_ICONS = {
       <path d="M31 36 l4 4 -4 4" stroke="currentColor" stroke-width="3" fill="none"
             stroke-linecap="round" stroke-linejoin="round"/>`
   },
+  aci: {
+    label: 'ACI Fabric',
+    color: '#0369a1',
+    svg: `
+      <g fill="currentColor">
+        <rect x="12" y="8" width="16" height="12" rx="3"/>
+        <rect x="36" y="8" width="16" height="12" rx="3"/>
+        <rect x="6" y="42" width="14" height="12" rx="3"/>
+        <rect x="25" y="42" width="14" height="12" rx="3"/>
+        <rect x="44" y="42" width="14" height="12" rx="3"/>
+      </g>
+      <g stroke="currentColor" stroke-width="2.2" opacity="0.75">
+        <path d="M20 20 L13 42 M20 20 L32 42 M20 20 L51 42"/>
+        <path d="M44 20 L13 42 M44 20 L32 42 M44 20 L51 42"/>
+      </g>`
+  },
   modem: {
     label: 'Modem',
     color: '#374151',
@@ -573,7 +589,7 @@ const NETWORK_ICONS = {
 const ICON_CATEGORIES = [
   { name: 'Core Network',
     types: ['router', 'l3switch', 'switch', 'hub', 'firewall', 'loadbalancer',
-            'proxy', 'vpn', 'ids', 'gateway', 'modem'] },
+            'proxy', 'vpn', 'ids', 'gateway', 'aci', 'modem'] },
   { name: 'Internet & Cloud',
     types: ['internet', 'cloud', 'privatecloud', 'cdn', 'dns', 'datacenter'] },
   { name: 'Compute & Storage',

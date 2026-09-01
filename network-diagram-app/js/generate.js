@@ -38,7 +38,7 @@
 // overlap resolution in parseSegment() keeps the longest match.
 const DEVICE_VOCAB = [
   { type: 'datacenter',   re: /\bdata\s*-?\s*cent(?:er|re)s?\b|\bdatacenters?\b/gi },
-  { type: 'loadbalancer', re: /\bload\s*-?\s*balancers?\b|\blbs?\b/gi },
+  { type: 'loadbalancer', re: /\bload\s*-?\s*balancers?\b|\blbs?\b|\bf5\b|\bnetscalers?\b|\bbig-?ip\b/gi },
   { type: 'l3switch',     re: /\blayer\s*-?\s*3\s*switch(?:es)?\b|\bl3\s*switch(?:es)?\b/gi },
   { type: 'webserver',    re: /\bweb\s*-?\s*servers?\b/gi },
   { type: 'mailserver',   re: /\b(?:e-?)?mail\s*-?\s*servers?\b|\bexchange\s*servers?\b|\bsmtp\b/gi },
@@ -55,10 +55,11 @@ const DEVICE_VOCAB = [
   { type: 'cdn',          re: /\bcdns?\b|\bcontent\s*delivery\b/gi },
   { type: 'dns',          re: /\bdns\b|\bname\s*servers?\b/gi },
   { type: 'cloud',        re: /\bclouds?\b|\baws\b|\bazure\b|\bgcp\b/gi },
-  { type: 'router',       re: /\brouters?\b/gi },
-  { type: 'switch',       re: /\bswitch(?:es)?\b/gi },
+  { type: 'aci',          re: /\baci(?:\s*(?:fabric|environment))?\b|\bspine[-\s]?leaf\b/gi },
+  { type: 'router',       re: /\brouters?\b|\basr\d*\b|\bisr\d*\b|\bcsr\d*\b/gi },
+  { type: 'switch',       re: /\bswitch(?:es)?\b|\bnexus\b|\bcatalysts?\b|\bleafs?\b|\bspines?\b/gi },
   { type: 'hub',          re: /\bhubs?\b/gi },
-  { type: 'firewall',     re: /\bfire\s*-?\s*walls?\b/gi },
+  { type: 'firewall',     re: /\bfire\s*-?\s*walls?\b|\bftds?\b|\bfirepower\b|\basa\b|\bpalo\s*alto\b|\bpa-?\d{2,4}\b|\bfortigates?\b|\bfortinet\b|\bcheck\s*point\b|\bngfw\b|\bsrx\d*\b/gi },
   { type: 'proxy',        re: /\bprox(?:y|ies)\b/gi },
   { type: 'vpn',          re: /\bvpns?(?:\s*gateways?)?\b/gi },
   { type: 'gateway',      re: /\bgateways?\b/gi },
@@ -71,7 +72,7 @@ const DEVICE_VOCAB = [
   { type: 'vm',           re: /\bvirtual\s*machines?\b|\bvms?\b/gi },
   { type: 'container',    re: /\bcontainers?\b|\bdocker\b|\bpods?\b/gi },
   { type: 'cluster',      re: /\bclusters?\b|\bkubernetes\b|\bk8s\b/gi },
-  { type: 'server',       re: /\bservers?\b|\bhosts?\b/gi },
+  { type: 'server',       re: /\bservers?\b|\bhosts?\b|\bucs\b/gi },
   { type: 'workstation',  re: /\bworkstations?\b|\bdesktops?\b|\bpcs?\b|\bcomputers?\b/gi },
   { type: 'laptop',       re: /\blaptops?\b|\bnotebooks?\b/gi },
   { type: 'tablet',       re: /\btablets?\b|\bipads?\b/gi },
@@ -106,6 +107,11 @@ const LINK_VOCAB = [
   /\bmpls\b/gi,
   /\bbgp\b/gi,
   /\bospf\b/gi,
+  /\bhsrp\b/gi,
+  /\bvrrp\b/gi,
+  /\bglbp\b/gi,
+  /\bvpc\b/gi,
+  /\bmlag\b/gi,
   /\bserial\b/gi
 ];
 
@@ -124,9 +130,24 @@ const HOSTNAME_TYPE_HINTS = [
 
 // Unnamed mentions of these types always refer to the same one thing:
 // eleven mentions of "Azure" are one cloud, not eleven.
-const SINGLETON_TYPES = new Set(['internet', 'cloud', 'privatecloud', 'datacenter', 'dns', 'cdn']);
+const SINGLETON_TYPES = new Set(['internet', 'cloud', 'privatecloud', 'datacenter', 'dns', 'cdn', 'aci']);
 
-const BRAND_LABELS = { azure: 'Azure', aws: 'AWS', gcp: 'GCP', wan: 'WAN' };
+// Product/vendor words become the node's label instead of the generic icon
+// name: "two FTD" → "FTD 1" / "FTD 2", "palo alto" → "Palo Alto".
+const BRAND_LABELS = {
+  azure: 'Azure', aws: 'AWS', gcp: 'GCP', wan: 'WAN',
+  ftd: 'FTD', firepower: 'Firepower', asa: 'ASA',
+  'palo alto': 'Palo Alto', paloalto: 'Palo Alto',
+  fortigate: 'FortiGate', fortinet: 'FortiGate',
+  'check point': 'Check Point', checkpoint: 'Check Point',
+  nexus: 'Nexus', catalyst: 'Catalyst', leaf: 'Leaf', spine: 'Spine',
+  f5: 'F5', netscaler: 'NetScaler', ucs: 'UCS Server'
+};
+
+function brandFor(word) {
+  const w = (word || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return BRAND_LABELS[w] || BRAND_LABELS[w.replace(/s$/, '')] || null;
+}
 
 const NUMBER_WORDS = {
   a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
@@ -265,9 +286,24 @@ function parseSegment(seg) {
     if (m) m.count--;
   }
 
+  // Prose often repeats one device in a single segment ("using single
+  // switch as hsrp from switch") — merge duplicate unnamed singular
+  // mentions of the same type.
+  for (let i = mentions.length - 1; i > 0; i--) {
+    const m = mentions[i];
+    if (m.count === 1 && !m.names.length &&
+        mentions.slice(0, i).some(x => x.type === m.type && x.count === 1 && !x.names.length)) {
+      mentions.splice(i, 1);
+    }
+  }
+
   const entries = mentions.concat(standalone).sort((a, b) => a.index - b.index);
   const linkTerms = [...new Set(linkSpans.map(l => l.text.trim()))];
-  return { entries, linkTerms, orphanIps };
+
+  // "two FTD in HA mode" / "firewalls in active/standby": draw the HA pair
+  // link between the redundant devices in this segment.
+  const haPair = /\bha\b|\bhigh[-\s]?availability\b|\bactive[\s\/-](?:standby|active)\b|\bfailover\b/i.test(seg);
+  return { entries, linkTerms, orphanIps, haPair };
 }
 
 // Zone (container) grammar, detected per sentence:
@@ -386,8 +422,8 @@ function buildFromGroups(groups) {
     for (const entry of group.entries) {
       if (nodes.length >= MAX_NODES) break;
       const icon = NETWORK_ICONS[entry.type];
-      // "Azure" / "AWS" / "WAN" beat the generic icon label as the name.
-      const brand = BRAND_LABELS[(entry.word || '').trim().toLowerCase()];
+      // "Azure" / "FTD" / "Palo Alto" beat the generic icon label.
+      const brand = brandFor(entry.word);
       const baseLabel = brand || icon.label;
 
       for (const name of entry.names) {
@@ -447,16 +483,32 @@ function buildFromGroups(groups) {
       layers.push({ layer, linkTerms: group.linkTerms, chainStart: group.chainStart });
     }
 
-    // "…which have a link between them": connect this group's devices to
-    // each other (the HA pair link between two switches).
-    if (group.peerLink && layer.conn.length >= 2) {
-      for (let i = 0; i + 1 < layer.conn.length && edges.length < MAX_EDGES; i++) {
-        const key = [layer.conn[i].id, layer.conn[i + 1].id].sort().join('>');
+    // Peer links inside a group: "which have a link between them" connects
+    // the named devices; "two FTD in HA mode" connects the redundant pair
+    // (same device type) with an HA label.
+    if ((group.peerLink || group.haPair) && layer.conn.length >= 2) {
+      const label = group.haPair ? 'HA' : '';
+      const pairs = [];
+      if (group.haPair) {
+        for (let i = 0; i + 1 < layer.conn.length; i++) {
+          if (layer.conn[i].type === layer.conn[i + 1].type) {
+            pairs.push([layer.conn[i], layer.conn[i + 1]]);
+          }
+        }
+      }
+      if (!pairs.length && group.peerLink) {
+        for (let i = 0; i + 1 < layer.conn.length; i++) {
+          pairs.push([layer.conn[i], layer.conn[i + 1]]);
+        }
+      }
+      for (const [na, nb] of pairs) {
+        if (edges.length >= MAX_EDGES) break;
+        const key = [na.id, nb.id].sort().join('>');
         if (!edgeKeys.has(key)) {
           edgeKeys.add(key);
           edges.push({
-            id: uid('e'), from: layer.conn[i].id, to: layer.conn[i + 1].id,
-            label: '', style: 'solid', shape: 'straight'
+            id: uid('e'), from: na.id, to: nb.id,
+            label, style: 'solid', shape: 'straight'
           });
         }
       }
@@ -491,7 +543,8 @@ function buildFromGroups(groups) {
     // incoming connection ("pass through PC-5 … into NGA-RW01") — pull
     // them once so they aren't reused downstream.
     let terms = layers[i].linkTerms;
-    if (!terms.length && layers[i + 1].linkTerms.length && !layers[i + 1].termsPulled) {
+    if (!terms.length && i + 2 === layers.length &&
+        layers[i + 1].linkTerms.length && !layers[i + 1].termsPulled) {
       terms = layers[i + 1].linkTerms;
       layers[i + 1].termsPulled = true;
     }
