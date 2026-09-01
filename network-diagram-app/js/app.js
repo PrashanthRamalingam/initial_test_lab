@@ -97,9 +97,22 @@ function edgePath(e) {
   if (!a || !b) return null;
   const ca = nodeCenter(a), cb = nodeCenter(b);
   if (e.shape === 'elbow') {
-    const midX = (ca.x + cb.x) / 2;
-    const p1 = clipToNode(a, { x: midX, y: ca.y });
-    const p2 = clipToNode(b, { x: midX, y: cb.y });
+    // Route along the dominant direction so connections terminate on the
+    // facing side of each icon: vertical flows leave the bottom of one
+    // node and enter the top of the next (and vice versa), horizontal
+    // flows use the left/right sides.
+    if (Math.abs(cb.y - ca.y) >= Math.abs(cb.x - ca.x)) {
+      const p1 = clipToNode(a, { x: ca.x, y: cb.y });
+      const p2 = clipToNode(b, { x: cb.x, y: ca.y });
+      const midY = (p1.y + p2.y) / 2;
+      return {
+        d: `M ${p1.x} ${p1.y} L ${p1.x} ${midY} L ${p2.x} ${midY} L ${p2.x} ${p2.y}`,
+        mid: { x: (p1.x + p2.x) / 2, y: midY }
+      };
+    }
+    const p1 = clipToNode(a, { x: cb.x, y: ca.y });
+    const p2 = clipToNode(b, { x: ca.x, y: cb.y });
+    const midX = (p1.x + p2.x) / 2;
     return {
       d: `M ${p1.x} ${p1.y} L ${midX} ${p1.y} L ${midX} ${p2.y} L ${p2.x} ${p2.y}`,
       mid: { x: midX, y: (p1.y + p2.y) / 2 }

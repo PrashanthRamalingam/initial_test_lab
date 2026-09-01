@@ -73,10 +73,28 @@ no API key:
    top to bottom.
 
 The example above yields: Router 1 & 2 → Data Center → Firewall 1 & 2.
-`window.aiGenerate` is a hook for a smarter backend: if it is defined, it
-receives any sentence the parser can't handle (the hosted live-preview
-artifact plugs Claude in there; a self-hosted deployment could call the
-Claude API server-side the same way).
+
+The grammar also understands real network language:
+
+- **Hostnames** — `bprt-01-rt01 router connects via fiber to 24 port
+  switch swg-01` labels the nodes `bprt-01-rt01` and `swg-01`. A bare
+  hostname works too: the device type is inferred from the name
+  (`rt`/`rw` → router, `sw`/`sc` → switch, `fw` → firewall, …), and "24
+  port" is understood as a description, not a quantity.
+- **Link labels** — connection words become edge labels: `via fiber`,
+  `trunk`, `intra link`, port-channels (`Po5.501`), interfaces
+  (`Eth8/4`, `Te0/1/4`), speeds (`10g`), protocols (`bgp`, `mpls`).
+- **De-duplication** — the same hostname is always one node, and repeated
+  unnamed mentions of singleton infrastructure (Azure/cloud, internet,
+  data center, DNS, CDN) collapse into one node, so a paragraph that says
+  "Azure" eleven times draws one cloud.
+
+Long multi-line configs (IP addresses, VLAN tables) exceed what a regex
+grammar can do, so `handleGenerate()` routes those to `window.aiGenerate`
+when it is defined — the hosted live-preview artifact plugs Claude in
+there (hostnames verbatim as node labels, interfaces/port-channels as
+edge labels); a self-hosted deployment could call the Claude API
+server-side through the same hook.
 
 ### 4. Exports
 
