@@ -197,6 +197,18 @@ function parseSegment(seg) {
       found.push({ type, index: m.index, len: m[0].length });
     }
   }
+  // Imported icons are matched by their palette name ("nexus 9300" after
+  // importing nexus-9300.svg).
+  for (const [key, ic] of Object.entries(state.customIcons || {})) {
+    if (!ic || !ic.label) continue;
+    const esc = ic.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    let m;
+    const re = new RegExp('\\b' + esc + 's?\\b', 'gi');
+    while ((m = re.exec(seg)) !== null) {
+      found.push({ type: key, index: m.index, len: m[0].length });
+    }
+  }
+
   found = found.filter(f =>
     !linkSpans.some(l => f.index < l.index + l.len && l.index < f.index + f.len));
   found.sort((a, b) => a.index - b.index || b.len - a.len);
@@ -394,7 +406,7 @@ function buildFromGroups(groups) {
   const placedGlobal = new Set(); // nodes already given a layout slot
 
   function makeNode(type, label, sub) {
-    const icon = NETWORK_ICONS[type];
+    const icon = NETWORK_ICONS[type] || NETWORK_ICONS.server;
     const node = { id: uid('n'), type, x: 0, y: 0, label, sub: sub || '', color: icon.color };
     nodes.push(node);
     return node;
@@ -421,7 +433,7 @@ function buildFromGroups(groups) {
 
     for (const entry of group.entries) {
       if (nodes.length >= MAX_NODES) break;
-      const icon = NETWORK_ICONS[entry.type];
+      const icon = NETWORK_ICONS[entry.type] || NETWORK_ICONS.server;
       // "Azure" / "FTD" / "Palo Alto" beat the generic icon label.
       const brand = brandFor(entry.word);
       const baseLabel = brand || icon.label;

@@ -71,7 +71,7 @@ function buildExportSvg() {
   }
 
   for (const n of state.nodes) {
-    const icon = NETWORK_ICONS[n.type];
+    const icon = iconFor(n.type);
     const pad = (NODE_W - ICON_SIZE) / 2;
     out += `<g transform="translate(${n.x},${n.y})">` +
       `<g transform="translate(${pad},10) scale(${ICON_SIZE / 64})" color="${n.color || icon.color}">${icon.svg}</g>` +

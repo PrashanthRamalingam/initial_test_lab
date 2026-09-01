@@ -56,9 +56,22 @@ const zoneById = (id) => (state.zones || []).find(z => z.id === id);
 function normalizeState() {
   if (!Array.isArray(state.zones)) state.zones = [];
   if (!Array.isArray(state.notes)) state.notes = [];
+  if (!state.customIcons || typeof state.customIcons !== 'object') state.customIcons = {};
   if (state.bg === undefined) state.bg = null;
 }
 const noteById = (id) => (state.notes || []).find(n => n.id === id);
+
+// A node whose icon type is unknown (older file, missing import) still
+// renders — as a generic server — instead of crashing.
+const iconFor = (type) => NETWORK_ICONS[type] || NETWORK_ICONS.server;
+
+// Imported (vendor) icons live in state.customIcons so they travel with
+// saved files and share links; register them into the icon table.
+function registerCustomIcons() {
+  for (const [key, ic] of Object.entries(state.customIcons || {})) {
+    if (ic && ic.svg) NETWORK_ICONS[key] = ic;
+  }
+}
 
 function toScene(evt) {
   // Convert a mouse event to scene (diagram) coordinates, honoring pan/zoom.
@@ -82,6 +95,7 @@ function setStatus(msg) { $('#status').textContent = msg; }
 // ---------------------------------------------------------------------------
 
 function render() {
+  registerCustomIcons();
   scene.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.zoom})`);
   svg.style.background = state.bg || '';
   // On small screens the properties panel is a bottom sheet shown only
@@ -229,7 +243,7 @@ function renderEdges() {
 function renderNodes() {
   nodeLayer.innerHTML = '';
   for (const n of state.nodes) {
-    const icon = NETWORK_ICONS[n.type];
+    const icon = iconFor(n.type);
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.classList.add('node');
     g.dataset.id = n.id;
@@ -280,8 +294,33 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------------------
 
 function buildPalette() {
+  rebuildPalette();
+  // Live search: hide non-matching items and any category left empty.
+  $('#palette-search').addEventListener('input', ev => applyPaletteFilter(ev.target.value));
+}
+
+function applyPaletteFilter(query) {
+  const q = (query || '').trim().toLowerCase();
+  for (const grid of $('#palette').querySelectorAll('.palette-grid')) {
+    let visible = 0;
+    for (const item of grid.children) {
+      const show = !q || item.dataset.search.includes(q);
+      item.hidden = !show;
+      if (show) visible++;
+    }
+    grid.hidden = visible === 0;
+    grid.previousElementSibling.hidden = visible === 0;
+  }
+}
+
+function rebuildPalette() {
+  registerCustomIcons();
   const pal = $('#palette');
-  for (const cat of ICON_CATEGORIES) {
+  pal.innerHTML = '';
+  const cats = [...ICON_CATEGORIES];
+  const customKeys = Object.keys(state.customIcons || {});
+  if (customKeys.length) cats.push({ name: 'Imported', types: customKeys });
+  for (const cat of cats) {
     const title = document.createElement('h3');
     title.className = 'palette-cat';
     title.textContent = cat.name;
@@ -290,6 +329,7 @@ function buildPalette() {
     grid.className = 'palette-grid';
     for (const key of cat.types) {
       const icon = NETWORK_ICONS[key];
+      if (!icon) continue;
       const item = document.createElement('div');
       item.className = 'palette-item';
       item.draggable = true;
@@ -314,21 +354,7 @@ function buildPalette() {
     }
     pal.appendChild(grid);
   }
-
-  // Live search: hide non-matching items and any category left empty.
-  $('#palette-search').addEventListener('input', ev => {
-    const q = ev.target.value.trim().toLowerCase();
-    for (const grid of pal.querySelectorAll('.palette-grid')) {
-      let visible = 0;
-      for (const item of grid.children) {
-        const show = !q || item.dataset.search.includes(q);
-        item.hidden = !show;
-        if (show) visible++;
-      }
-      grid.hidden = visible === 0;
-      grid.previousElementSibling.hidden = visible === 0;
-    }
-  });
+  applyPaletteFilter($('#palette-search').value);
 }
 
 svg.addEventListener('dragover', ev => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
@@ -342,7 +368,7 @@ svg.addEventListener('drop', ev => {
 
 function addNode(type, x, y) {
   pushUndo();
-  const icon = NETWORK_ICONS[type];
+  const icon = iconFor(type);
   const count = state.nodes.filter(n => n.type === type).length + 1;
   const node = { id: uid('n'), type, x, y, label: `${icon.label} ${count}`, color: icon.color };
   state.nodes.push(node);
@@ -687,7 +713,7 @@ function renderProperties() {
     const n = nodeById(selection.id);
     if (!n) { panel.innerHTML = ''; return; }
     panel.innerHTML = `
-      <h3>${NETWORK_ICONS[n.type].label}</h3>
+      <h3>${iconFor(n.type).label}</h3>
       <label>Label <input id="p-label" type="text" value="${escapeHtml(n.label)}"></label>
       <label>Details (IP, VLAN, model…) <input id="p-sub" type="text" value="${escapeHtml(n.sub || '')}"></label>
       <label>Color <input id="p-color" type="color" value="${n.color}"></label>
@@ -801,6 +827,70 @@ $('#btn-add-note').addEventListener('click', () => {
   state.notes.push(note);
   selection = { kind: 'note', id: note.id };
   render();
+});
+
+// ---------------------------------------------------------------------------
+// Icon import: load SVG files (e.g. the official Cisco / Azure / AWS
+// stencil SVGs the user downloaded from the vendor) into the palette.
+// Icons are sanitized, normalized to the 64x64 icon grid, stored in
+// state.customIcons (so they travel with saved files and share links),
+// and flow into every export like the built-ins.
+// ---------------------------------------------------------------------------
+
+function sanitizeSvg(text) {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (!svg || svg.nodeName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) return null;
+  // Strip anything active or external.
+  doc.querySelectorAll('script, foreignObject, iframe, animate, set, animateTransform, animateMotion')
+    .forEach(n => n.remove());
+  for (const el of doc.querySelectorAll('*')) {
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on') ||
+          ((name === 'href' || name === 'xlink:href') && !attr.value.trim().startsWith('#'))) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  }
+  // Normalize the artwork into our 64x64 icon grid, centered.
+  let vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  if (vb.length !== 4 || vb.some(isNaN) || vb[2] <= 0 || vb[3] <= 0) {
+    const w = parseFloat(svg.getAttribute('width')) || 64;
+    const h = parseFloat(svg.getAttribute('height')) || 64;
+    vb = [0, 0, w > 0 ? w : 64, h > 0 ? h : 64];
+  }
+  const s = 64 / Math.max(vb[2], vb[3]);
+  const tx = -vb[0] * s + (64 - vb[2] * s) / 2;
+  const ty = -vb[1] * s + (64 - vb[3] * s) / 2;
+  const inner = svg.innerHTML;
+  if (!inner.trim() || inner.length > 200000) return null;
+  return `<g transform="translate(${tx.toFixed(2)},${ty.toFixed(2)}) scale(${s.toFixed(4)})">${inner}</g>`;
+}
+
+$('#icon-files').addEventListener('change', async ev => {
+  const files = [...ev.target.files].filter(f => /\.svg$/i.test(f.name)).slice(0, 200);
+  if (!files.length) return;
+  pushUndo();
+  let ok = 0, failed = 0;
+  for (const f of files) {
+    try {
+      const svg = sanitizeSvg(await f.text());
+      if (!svg) { failed++; continue; }
+      const label = (f.name.replace(/\.svg$/i, '').replace(/[-_.]+/g, ' ').trim()
+        .replace(/\b\w/g, c => c.toUpperCase()) || 'Icon').slice(0, 30);
+      const key = ('x_' + label.toLowerCase().replace(/[^a-z0-9]+/g, '_')).slice(0, 48);
+      state.customIcons[key] = { label, color: '#3b5b7e', svg, custom: true };
+      ok++;
+    } catch (_) { failed++; }
+  }
+  registerCustomIcons();
+  rebuildPalette();
+  render();
+  setStatus(ok
+    ? `Imported ${ok} icon(s)${failed ? ` (${failed} skipped)` : ''} — see “Imported” in the palette. They save and share with your diagrams, and the text generator knows them by name.`
+    : 'No usable SVG files found in that selection.');
+  ev.target.value = '';
 });
 
 // ---------------------------------------------------------------------------
