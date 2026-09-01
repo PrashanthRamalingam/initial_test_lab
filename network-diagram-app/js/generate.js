@@ -19,25 +19,57 @@
 
 'use strict';
 
-// --- Vocabulary: synonyms → icon type. Order matters: multi-word phrases
-// (data center, load balancer, access point) must match before their parts.
+// --- Vocabulary: synonyms → icon type. Longer, more specific phrases are
+// listed before their generic parts ("web server" before "server",
+// "private cloud" before "cloud"); overlap resolution in parseSegment()
+// then keeps the longest match at any position.
 const DEVICE_VOCAB = [
   { type: 'datacenter',   re: /\bdata\s*-?\s*cent(?:er|re)s?\b|\bdatacenters?\b/g },
   { type: 'loadbalancer', re: /\bload\s*-?\s*balancers?\b|\blbs?\b/g },
+  { type: 'l3switch',     re: /\blayer\s*-?\s*3\s*switch(?:es)?\b|\bl3\s*switch(?:es)?\b/g },
+  { type: 'webserver',    re: /\bweb\s*-?\s*servers?\b/g },
+  { type: 'mailserver',   re: /\b(?:e-?)?mail\s*-?\s*servers?\b|\bexchange\s*servers?\b|\bsmtp\b/g },
+  { type: 'privatecloud', re: /\bprivate\s*clouds?\b/g },
+  { type: 'wlc',          re: /\bwireless\s*(?:lan\s*)?controllers?\b|\bwlcs?\b/g },
   { type: 'wifi',         re: /\baccess\s*points?\b|\bwi-?fi\b|\bwireless\b|\baps?\b/g },
+  { type: 'celltower',    re: /\bcell\s*towers?\b|\bantennas?\b|\b[45]g\b|\blte\b/g },
+  { type: 'satellite',    re: /\bsatellites?\b|\bvsat\b|\bdish(?:es)?\b/g },
+  { type: 'usergroup',    re: /\buser\s*groups?\b|\bgroups?\b|\bteams?\b|\bdepartments?\b/g },
+  { type: 'admin',        re: /\badmin(?:istrator)?s?\b/g },
+  { type: 'camera',       re: /\b(?:ip\s*|security\s*|cctv\s*)?cameras?\b|\bcctv\b/g },
+  { type: 'ids',          re: /\bids\b|\bips\b|\bintrusion\b/g },
   { type: 'internet',     re: /\binternet\b|\bwan\b/g },
+  { type: 'cdn',          re: /\bcdns?\b|\bcontent\s*delivery\b/g },
+  { type: 'dns',          re: /\bdns\b|\bname\s*servers?\b/g },
   { type: 'cloud',        re: /\bclouds?\b|\baws\b|\bazure\b|\bgcp\b/g },
   { type: 'router',       re: /\brouters?\b/g },
   { type: 'switch',       re: /\bswitch(?:es)?\b/g },
+  { type: 'hub',          re: /\bhubs?\b/g },
   { type: 'firewall',     re: /\bfire\s*-?\s*walls?\b/g },
-  { type: 'vpn',          re: /\bvpns?\b/g },
+  { type: 'proxy',        re: /\bprox(?:y|ies)\b/g },
+  { type: 'vpn',          re: /\bvpns?(?:\s*gateways?)?\b/g },
+  { type: 'gateway',      re: /\bgateways?\b/g },
+  { type: 'modem',        re: /\bmodems?\b/g },
   { type: 'database',     re: /\bdatabases?\b|\bdbs?\b/g },
-  { type: 'storage',      re: /\bstorage\b|\bnas\b|\bsan\b/g },
-  { type: 'server',       re: /\bservers?\b|\bhosts?\b|\bvms?\b/g },
+  { type: 'san',          re: /\bsan\s*fabrics?\b|\bsan\b/g },
+  { type: 'storage',      re: /\bstorage\b|\bnas\b/g },
+  { type: 'backup',       re: /\bbackups?\b|\btapes?\b/g },
+  { type: 'mainframe',    re: /\bmainframes?\b/g },
+  { type: 'vm',           re: /\bvirtual\s*machines?\b|\bvms?\b/g },
+  { type: 'container',    re: /\bcontainers?\b|\bdocker\b|\bpods?\b/g },
+  { type: 'cluster',      re: /\bclusters?\b|\bkubernetes\b|\bk8s\b/g },
+  { type: 'server',       re: /\bservers?\b|\bhosts?\b/g },
   { type: 'workstation',  re: /\bworkstations?\b|\bdesktops?\b|\bpcs?\b|\bcomputers?\b/g },
   { type: 'laptop',       re: /\blaptops?\b|\bnotebooks?\b/g },
+  { type: 'tablet',       re: /\btablets?\b|\bipads?\b/g },
+  { type: 'mobile',       re: /\b(?:mobile|cell|smart)\s*-?\s*phones?\b|\bmobiles?\b|\biphones?\b|\bandroid\b/g },
   { type: 'phone',        re: /\bphones?\b|\bvoip\b/g },
   { type: 'printer',      re: /\bprinters?\b/g },
+  { type: 'scanner',      re: /\bscanners?\b/g },
+  { type: 'tv',           re: /\btvs?\b|\bdisplays?\b|\bscreens?\b|\bmonitors?\b/g },
+  { type: 'pos',          re: /\bpos\b|\bpoint\s*of\s*sale\b|\bterminals?\b/g },
+  { type: 'iot',          re: /\biot\b|\bsensors?\b|\bthermostats?\b/g },
+  { type: 'shield',       re: /\bshields?\b/g },
   { type: 'user',         re: /\busers?\b|\bclients?\b|\bpeople\b|\bemployees?\b/g }
 ];
 
@@ -62,18 +94,28 @@ function parseSegment(seg) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(seg)) !== null) {
-      found.push({ type, index: m.index });
+      found.push({ type, index: m.index, len: m[0].length });
     }
   }
-  found.sort((a, b) => a.index - b.index);
+  // Sort by position; on ties, longest match first so "security camera"
+  // beats "security" and "vpn gateway" beats "gateway".
+  found.sort((a, b) => a.index - b.index || b.len - a.len);
 
-  // Merge overlapping/adjacent hits of the same type: "wireless access
-  // point" matches the wifi vocabulary twice but is one device mention.
   const mentions = [];
+  let coveredTo = -1;
   for (const f of found) {
+    // Skip matches inside an earlier, longer match.
+    if (f.index < coveredTo) continue;
+    // Merge adjacent hits of the same type: "wireless access point"
+    // matches the wifi vocabulary twice but is one device mention.
     const prev = mentions[mentions.length - 1];
-    if (prev && prev.type === f.type && f.index - prev.index < 16) continue;
+    if (prev && prev.type === f.type && f.index - (prev.index + prev.len) < 4) {
+      coveredTo = f.index + f.len;
+      prev.len = coveredTo - prev.index;
+      continue;
+    }
     mentions.push(f);
+    coveredTo = f.index + f.len;
   }
 
   // Attach a count: the last number (digit or word) in the 20 chars before

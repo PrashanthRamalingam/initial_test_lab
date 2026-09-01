@@ -69,6 +69,9 @@ function setStatus(msg) { $('#status').textContent = msg; }
 
 function render() {
   scene.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.zoom})`);
+  // On small screens the properties panel is a bottom sheet shown only
+  // while something is selected (see the media query in styles.css).
+  document.body.classList.toggle('has-selection', !!selection);
   renderEdges();
   renderNodes();
   renderProperties();
@@ -183,28 +186,54 @@ function escapeHtml(s) {
 
 function buildPalette() {
   const pal = $('#palette');
-  for (const key of ICON_ORDER) {
-    const icon = NETWORK_ICONS[key];
-    const item = document.createElement('div');
-    item.className = 'palette-item';
-    item.draggable = true;
-    item.title = `Drag onto canvas (or click) to add ${icon.label}`;
-    item.innerHTML = `
-      <svg viewBox="0 0 64 64" style="color:${icon.color}">${icon.svg}</svg>
-      <span>${icon.label}</span>`;
-    item.addEventListener('dragstart', ev => {
-      ev.dataTransfer.setData('text/x-netdraw-type', key);
-      ev.dataTransfer.effectAllowed = 'copy';
-    });
-    item.addEventListener('click', () => {
-      // Click-to-add: place near center of the current viewport.
-      const r = svg.getBoundingClientRect();
-      addNode(key,
-        snap((r.width / 2 - view.x) / view.zoom - NODE_W / 2 + (Math.random() * 60 - 30)),
-        snap((r.height / 2 - view.y) / view.zoom - NODE_H / 2 + (Math.random() * 60 - 30)));
-    });
-    pal.appendChild(item);
+  for (const cat of ICON_CATEGORIES) {
+    const title = document.createElement('h3');
+    title.className = 'palette-cat';
+    title.textContent = cat.name;
+    pal.appendChild(title);
+    const grid = document.createElement('div');
+    grid.className = 'palette-grid';
+    for (const key of cat.types) {
+      const icon = NETWORK_ICONS[key];
+      const item = document.createElement('div');
+      item.className = 'palette-item';
+      item.draggable = true;
+      item.dataset.type = key;
+      item.dataset.search = (icon.label + ' ' + key).toLowerCase();
+      item.title = `Drag onto canvas (or tap) to add ${icon.label}`;
+      item.innerHTML = `
+        <svg viewBox="0 0 64 64" style="color:${icon.color}">${icon.svg}</svg>
+        <span>${icon.label}</span>`;
+      item.addEventListener('dragstart', ev => {
+        ev.dataTransfer.setData('text/x-netdraw-type', key);
+        ev.dataTransfer.effectAllowed = 'copy';
+      });
+      item.addEventListener('click', () => {
+        // Tap/click-to-add: place near center of the current viewport.
+        const r = svg.getBoundingClientRect();
+        addNode(key,
+          snap((r.width / 2 - view.x) / view.zoom - NODE_W / 2 + (Math.random() * 60 - 30)),
+          snap((r.height / 2 - view.y) / view.zoom - NODE_H / 2 + (Math.random() * 60 - 30)));
+      });
+      grid.appendChild(item);
+    }
+    pal.appendChild(grid);
   }
+
+  // Live search: hide non-matching items and any category left empty.
+  $('#palette-search').addEventListener('input', ev => {
+    const q = ev.target.value.trim().toLowerCase();
+    for (const grid of pal.querySelectorAll('.palette-grid')) {
+      let visible = 0;
+      for (const item of grid.children) {
+        const show = !q || item.dataset.search.includes(q);
+        item.hidden = !show;
+        if (show) visible++;
+      }
+      grid.hidden = visible === 0;
+      grid.previousElementSibling.hidden = visible === 0;
+    }
+  });
 }
 
 svg.addEventListener('dragover', ev => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
@@ -232,7 +261,36 @@ function addNode(type, x, y) {
 
 let drag = null; // {kind:'node', id, dx, dy} | {kind:'pan', sx, sy, vx, vy}
 
-svg.addEventListener('mousedown', ev => {
+// Pointer events cover mouse, touch, and pen with one code path. For touch,
+// two active pointers on the canvas become a pinch (zoom + pan) and cancel
+// any in-progress node drag.
+const activePointers = new Map();
+let pinch = null;
+
+// touch-action: none in CSS should stop the browser from claiming touch
+// gestures, but some engines still issue a pointercancel unless the raw
+// touch events are also prevented — so do both.
+svg.addEventListener('touchstart', ev => ev.preventDefault(), { passive: false });
+svg.addEventListener('touchmove', ev => ev.preventDefault(), { passive: false });
+
+svg.addEventListener('pointerdown', ev => {
+  // Touch pointers implicitly capture to the element under the finger; our
+  // re-render replaces that element, which would fire pointercancel and
+  // kill the drag. Capturing on the SVG root (never rebuilt) prevents that.
+  try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+  activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (activePointers.size === 2) {
+    drag = null;
+    const [p1, p2] = [...activePointers.values()];
+    pinch = {
+      dist: Math.hypot(p2.x - p1.x, p2.y - p1.y),
+      mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+      zoom: view.zoom, vx: view.x, vy: view.y
+    };
+    return;
+  }
+  if (activePointers.size > 2) return;
+
   const nodeEl = ev.target.closest('.node');
   const edgeEl = ev.target.closest('.edge');
 
@@ -259,7 +317,24 @@ svg.addEventListener('mousedown', ev => {
   }
 });
 
-window.addEventListener('mousemove', ev => {
+window.addEventListener('pointermove', ev => {
+  if (activePointers.has(ev.pointerId)) {
+    activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  }
+  if (pinch && activePointers.size >= 2) {
+    const [p1, p2] = [...activePointers.values()];
+    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+    const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    const z = Math.min(3, Math.max(0.25, pinch.zoom * dist / pinch.dist));
+    const r = svg.getBoundingClientRect();
+    // Keep the scene point that started under the pinch midpoint under the
+    // current midpoint.
+    view.x = (mid.x - r.left) - ((pinch.mid.x - r.left - pinch.vx) / pinch.zoom) * z;
+    view.y = (mid.y - r.top) - ((pinch.mid.y - r.top - pinch.vy) / pinch.zoom) * z;
+    view.zoom = z;
+    render();
+    return;
+  }
   if (!drag) {
     if (mode === 'connect' && connectSource) drawConnectPreview(ev);
     return;
@@ -278,7 +353,13 @@ window.addEventListener('mousemove', ev => {
   }
 });
 
-window.addEventListener('mouseup', () => { drag = null; });
+function endPointer(ev) {
+  activePointers.delete(ev.pointerId);
+  if (activePointers.size < 2) pinch = null;
+  if (activePointers.size === 0) drag = null;
+}
+window.addEventListener('pointerup', endPointer);
+window.addEventListener('pointercancel', endPointer);
 
 svg.addEventListener('dblclick', ev => {
   const nodeEl = ev.target.closest('.node');
