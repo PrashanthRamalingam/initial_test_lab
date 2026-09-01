@@ -1622,6 +1622,7 @@ function edgePath(e) {
       return {
         d: `M ${p1.x} ${p1.y} L ${p1.x} ${midY} L ${p2.x} ${midY} L ${p2.x} ${p2.y}`,
         mid: { x: (p1.x + p2.x) / 2, y: midY },
+        lerp: t => ({ x: p1.x + (p2.x - p1.x) * t, y: midY }),
         endA: { x: p1.x, y: p1.y + 22 * Math.sign(midY - p1.y || 1) },
         endB: { x: p2.x, y: p2.y + 22 * Math.sign(midY - p2.y || -1) }
       };
@@ -1632,6 +1633,7 @@ function edgePath(e) {
     return {
       d: `M ${p1.x} ${p1.y} L ${midX} ${p1.y} L ${midX} ${p2.y} L ${p2.x} ${p2.y}`,
       mid: { x: midX, y: (p1.y + p2.y) / 2 },
+      lerp: t => ({ x: midX, y: p1.y + (p2.y - p1.y) * t }),
       endA: { x: p1.x + 26 * Math.sign(midX - p1.x || 1), y: p1.y },
       endB: { x: p2.x + 26 * Math.sign(midX - p2.x || -1), y: p2.y }
     };
@@ -1642,9 +1644,22 @@ function edgePath(e) {
   return {
     d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`,
     mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+    lerp: t => ({ x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t }),
     endA: { x: p1.x + ux * 26, y: p1.y + uy * 26 },
     endB: { x: p2.x - ux * 26, y: p2.y - uy * 26 }
   };
+}
+
+// Links converging on one device would stack their labels on top of each
+// other; slide each label a little along its own line instead.
+function edgeLabelFractions(edges) {
+  const seen = {};
+  const fractions = {};
+  for (const e of edges) {
+    const i = (seen[e.from] = (seen[e.from] || 0) + 1) - 1;
+    fractions[e.id] = 0.5 + ((i % 3) - 1) * 0.13;
+  }
+  return fractions;
 }
 
 function renderZones() {
@@ -1675,6 +1690,7 @@ function zoneMembers(z) {
 
 function renderEdges() {
   edgeLayer.innerHTML = '';
+  const fractions = edgeLabelFractions(state.edges);
   for (const e of state.edges) {
     const path = edgePath(e);
     if (!path) continue;
@@ -1716,7 +1732,10 @@ function renderEdges() {
         } catch (_) { /* detached during re-render */ }
       });
     };
-    if (e.label) addLabel(path.mid.x, path.mid.y, e.label);
+    if (e.label) {
+      const at = path.lerp ? path.lerp(fractions[e.id] ?? 0.5) : path.mid;
+      addLabel(at.x, at.y, e.label);
+    }
     if (e.fromLabel) addLabel(path.endA.x, path.endA.y, e.fromLabel);
     if (e.toLabel) addLabel(path.endB.x, path.endB.y, e.toLabel);
     edgeLayer.appendChild(g);
@@ -2195,13 +2214,28 @@ function renderProperties() {
   if (selection.kind === 'node') {
     const n = nodeById(selection.id);
     if (!n) { panel.innerHTML = ''; return; }
+    const typeKeys = ICON_ORDER.concat(Object.keys(state.customIcons || {}))
+      .filter(t => NETWORK_ICONS[t]);
+    if (!typeKeys.includes(n.type)) typeKeys.unshift(n.type);
     panel.innerHTML = `
       <h3>${iconFor(n.type).label}</h3>
       <label>Label <input id="p-label" type="text" value="${escapeHtml(n.label)}"></label>
+      <label>Device type
+        <select id="p-type">${typeKeys.map(t =>
+          `<option value="${t}"${t === n.type ? ' selected' : ''}>${escapeHtml(iconFor(t).label)}</option>`
+        ).join('')}</select></label>
       <label>Details (IP, VLAN, model…) <input id="p-sub" type="text" value="${escapeHtml(n.sub || '')}"></label>
       <label>Color <input id="p-color" type="color" value="${n.color}"></label>
       <button id="p-delete" class="danger">Delete node</button>`;
     $('#p-label').addEventListener('change', ev => { pushUndo(); n.label = ev.target.value; render(); });
+    $('#p-type').addEventListener('change', ev => {
+      pushUndo();
+      const previous = iconFor(n.type);
+      n.type = ev.target.value;
+      // Keep a hand-picked color; refresh one that was the type default.
+      if (n.color === previous.color) n.color = iconFor(n.type).color;
+      render();
+    });
     $('#p-sub').addEventListener('change', ev => { pushUndo(); n.sub = ev.target.value.trim(); render(); });
     $('#p-color').addEventListener('input', ev => { n.color = ev.target.value; renderNodes(); saveLocal(); });
     $('#p-delete').addEventListener('click', deleteSelection);
@@ -2599,12 +2633,16 @@ function buildExportSvg() {
       `<text x="${x}" y="${y + 4}" text-anchor="middle" font-size="11" fill="#475569">${xmlEscape(text)}</text>\n`;
   };
 
+  const fractions = edgeLabelFractions(state.edges);
   for (const e of state.edges) {
     const p = edgePath(e);
     if (!p) continue;
     const dash = e.style === 'dashed' ? ' stroke-dasharray="7 5"' : '';
     out += `<path d="${p.d}" fill="none" stroke="#64748b" stroke-width="2"${dash}/>\n`;
-    if (e.label) out += labelAt(p.mid.x, p.mid.y, e.label);
+    if (e.label) {
+      const at = p.lerp ? p.lerp(fractions[e.id] ?? 0.5) : p.mid;
+      out += labelAt(at.x, at.y, e.label);
+    }
     if (e.fromLabel) out += labelAt(p.endA.x, p.endA.y, e.fromLabel);
     if (e.toLabel) out += labelAt(p.endB.x, p.endB.y, e.toLabel);
   }
@@ -3109,9 +3147,15 @@ const MAX_NODES = 60;
 const MAX_EDGES = 80;
 
 function inferTypeFromHostname(name) {
-  const n = name.toLowerCase();
-  for (const [hint, type] of HOSTNAME_TYPE_HINTS) {
-    if (n.includes(hint)) return type;
+  // Match hints against the name's alphabetic tokens (split on digits and
+  // separators) so "DMZSW" -> switch and "NGA-SC01" -> switch, while a
+  // hint never fires from the middle of an unrelated word.
+  const tokens = String(name).toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const hints = [...HOSTNAME_TYPE_HINTS].sort((a, b) => b[0].length - a[0].length);
+  for (const [hint, type] of hints) {
+    for (const token of tokens) {
+      if (token === hint || token.startsWith(hint) || token.endsWith(hint)) return type;
+    }
   }
   return 'server';
 }
@@ -3588,7 +3632,11 @@ function setLayoutDir(dir) {
 // Place layers as centered rows (vertical) or columns (horizontal). Wide
 // layers wrap into sub-rows of six so huge fan-outs stay on screen.
 function layoutLayers(layers) {
-  const CROSS_GAP = 170, ROW_GAP = 150, PER_ROW = 6, CENTER = 420;
+  const CROSS_GAP = 170, ROW_GAP = 150, CENTER = 420;
+  // Wrap wide layers, but let big imported graphs spread out instead of
+  // folding into a dense grid.
+  const widest = layers.reduce((m, l) => Math.max(m, l.length), 0);
+  const PER_ROW = Math.max(6, Math.min(12, Math.ceil(Math.sqrt(widest * 2))));
   const MAIN_GAP = layoutDir === 'horizontal' ? 250 : 190;
   let main = 40;
   for (const layer of layers) {
@@ -3670,7 +3718,43 @@ function layoutGraph(nodes, edges) {
     const li = layerOf[n.id] || 0;
     (layers[li] = layers[li] || []).push(n);
   }
-  layoutLayers(layers.filter(Boolean));
+  const ordered = layers.filter(Boolean);
+  reduceCrossings(ordered, edges);
+  layoutLayers(ordered);
+}
+
+// Barycenter ordering: repeatedly place each node next to the average
+// position of its neighbours in the adjacent layer. A few alternating
+// sweeps turn a spaghetti of long diagonals into readable columns.
+function reduceCrossings(layers, edges) {
+  if (layers.length < 2) return;
+  const neighbours = {};
+  for (const e of edges) {
+    (neighbours[e.from] = neighbours[e.from] || []).push(e.to);
+    (neighbours[e.to] = neighbours[e.to] || []).push(e.from);
+  }
+  const pos = {};
+  const reindex = () => layers.forEach(l => l.forEach((n, i) => { pos[n.id] = i; }));
+  reindex();
+
+  const sweep = (indices) => {
+    for (const li of indices) {
+      const fixed = new Set([...(layers[li - 1] || []), ...(layers[li + 1] || [])].map(n => n.id));
+      const bary = new Map(layers[li].map(n => {
+        const seen = (neighbours[n.id] || []).filter(id => fixed.has(id)).map(id => pos[id]);
+        return [n.id, seen.length ? seen.reduce((a, b) => a + b, 0) / seen.length : pos[n.id]];
+      }));
+      layers[li] = layers[li]
+        .map((n, i) => ({ n, i }))
+        .sort((a, b) => (bary.get(a.n.id) - bary.get(b.n.id)) || (a.i - b.i))
+        .map(x => x.n);
+      reindex();
+    }
+  };
+
+  const down = layers.map((_, i) => i);
+  const up = [...down].reverse();
+  for (let pass = 0; pass < 4; pass++) sweep(pass % 2 ? up : down);
 }
 
 // Re-run auto-layout on whatever is on the canvas (after manual edits, or
@@ -3733,6 +3817,235 @@ function looksComplex(text) {
     (/\bvlan\b/i.test(text) && text.length > 100);
 }
 
+// ---------------------------------------------------------------------------
+// Mermaid / arrow-syntax import
+//
+// Structured topology definitions are parsed EXACTLY (no guessing):
+//
+//   flowchart TD
+//   subgraph DMZ
+//     FC01[Firewall 1] -->|"Bond1 - External"| DMZSW
+//     FC02 -.-> DMZSW
+//   end
+//   DMZSW --> RB01 & RB02
+//
+// Supported: graph/flowchart headers, node shapes (A[..] A(..) A((..))
+// A[(..)] A{..} A{{..}} A[[..]]), edge labels (-->|label| and
+// -- label -->), dotted (-.->) and thick (==>) links, chains
+// (A --> B --> C), multi-node groups (A --> B & C), subgraph blocks
+// (which become zones), and %% comments. Everything else (classDef,
+// style, click, linkStyle) is ignored rather than treated as a device.
+// ---------------------------------------------------------------------------
+
+const MERMAID_MAX_NODES = 200;
+const MERMAID_MAX_EDGES = 400;
+
+// Dotted first, then thick, then plain; each may carry a |label|.
+const MERMAID_ARROW =
+  /(-\.+->|-\.+-|={2,}>|={3,}|-{2,}>|-{3,}|--[ox])(?:\s*\|\s*(?:"([^"]*)"|'([^']*)'|([^|]*?))\s*\|)?/g;
+
+function looksLikeMermaid(text) {
+  if (/^\s*(?:graph|flowchart)\s+[A-Za-z]{2}\b/im.test(text)) return true;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  let arrows = 0;
+  for (const line of lines) {
+    MERMAID_ARROW.lastIndex = 0;
+    if (MERMAID_ARROW.test(line)) arrows++;
+  }
+  return arrows >= 2 || (arrows === 1 && /^\s*subgraph\b/im.test(text));
+}
+
+// "NGA-SC01<br/>10.0.0.1" → {label: 'NGA-SC01', sub: '10.0.0.1'}
+function mermaidLabel(raw) {
+  const text = String(raw || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/#quot;/g, '"').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
+  const [first, ...rest] = text.split('\n').map(s => s.trim()).filter(Boolean);
+  return { label: (first || '').slice(0, 40), sub: rest.join(' ').slice(0, 40) };
+}
+
+// "FC01[Firewall 1]" → {id, label, shape}
+function mermaidNodeToken(token) {
+  const t = String(token || '').trim().replace(/;+$/, '');
+  if (!t) return null;
+  const m = /^([A-Za-z0-9_.:\-]+)\s*([[({>].*)?$/.exec(t);
+  if (!m) return null;
+  let label = '', shape = '';
+  if (m[2]) {
+    shape = m[2].slice(0, 2);
+    label = m[2].replace(/^[[({>]+/, '').replace(/[\])}/\\]+$/, '');
+  }
+  return { id: m[1], label, shape };
+}
+
+// Mermaid shapes that imply a device kind; otherwise the name decides.
+const MERMAID_SHAPE_TYPES = { '[(': 'database', '((': 'cloud', '[[': 'server' };
+
+// Type from a node's id and label: device words in the label win, then
+// hostname hints, then a generic server.
+function inferTypeFromName(id, label) {
+  const text = `${label || ''} ${id || ''}`;
+  for (const { type, re } of DEVICE_VOCAB) {
+    re.lastIndex = 0;
+    if (re.test(text)) return type;
+  }
+  return inferTypeFromHostname(id || label || '');
+}
+
+function parseMermaid(text) {
+  const nodes = new Map();
+  const edges = [];
+  const zones = [];
+  const stack = [];
+
+  const ensure = (id, label, shape) => {
+    let n = nodes.get(id);
+    if (!n) {
+      n = { id, label: id, sub: '', shape: shape || '' };
+      nodes.set(id, n);
+    }
+    if (label) {
+      const parsed = mermaidLabel(label);
+      if (parsed.label) n.label = parsed.label;
+      if (parsed.sub) n.sub = parsed.sub;
+      n.named = true;
+    }
+    if (shape && !n.shape) n.shape = shape;
+    if (stack.length) {
+      const zone = stack[stack.length - 1];
+      if (!zone.ids.includes(id)) zone.ids.push(id);
+    }
+    return n;
+  };
+
+  for (const rawLine of String(text).split('\n')) {
+    let line = rawLine.replace(/%%.*$/, '').trim().replace(/;+$/, '');
+    if (!line) continue;
+    if (/^(?:graph|flowchart)\b/i.test(line)) continue;
+    if (/^(?:classDef|class|style|linkStyle|click|direction|title|accTitle|accDescr)\b/i.test(line)) continue;
+
+    const sg = /^subgraph\s+(.*)$/i.exec(line);
+    if (sg) {
+      const token = mermaidNodeToken(sg[1]);
+      const label = token && token.label ? mermaidLabel(token.label).label
+        : mermaidLabel(sg[1]).label || 'Zone';
+      const zone = { label, ids: [] };
+      zones.push(zone);
+      stack.push(zone);
+      continue;
+    }
+    if (/^end\b/i.test(line)) { stack.pop(); continue; }
+
+    // "A -- text --> B" is the same as "A -->|text| B"; normalize so one
+    // arrow pattern handles both.
+    line = line
+      .replace(/--\s+([^->|]+?)\s+-->/g, '-->|$1|')
+      .replace(/==\s+([^=>|]+?)\s+==>/g, '==>|$1|');
+
+    MERMAID_ARROW.lastIndex = 0;
+    const parts = [];
+    const links = [];
+    let last = 0, m;
+    while ((m = MERMAID_ARROW.exec(line)) !== null) {
+      parts.push(line.slice(last, m.index));
+      last = MERMAID_ARROW.lastIndex;
+      links.push({
+        label: (m[2] || m[3] || m[4] || '').trim(),
+        style: /^-\.+/.test(m[1]) ? 'dashed' : 'solid'
+      });
+    }
+
+    if (!links.length) {
+      // A line with no arrow is a node declaration ("A[Label]") or a bare
+      // reference — inside a subgraph the bare form is how membership is
+      // declared, so register it either way.
+      for (const part of line.split('&')) {
+        const token = mermaidNodeToken(part);
+        if (token && /^[A-Za-z0-9_.:-]+$/.test(token.id)) {
+          ensure(token.id, token.label, token.shape);
+        }
+      }
+      continue;
+    }
+    parts.push(line.slice(last));
+
+    // "A --> B & C" fans out to every node in the group.
+    const groups = parts.map(part =>
+      part.split('&').map(mermaidNodeToken).filter(Boolean));
+    for (const group of groups) {
+      for (const token of group) ensure(token.id, token.label, token.shape);
+    }
+    for (let i = 0; i + 1 < groups.length; i++) {
+      for (const a of groups[i]) {
+        for (const b of groups[i + 1]) {
+          edges.push({ from: a.id, to: b.id, label: links[i].label, style: links[i].style });
+        }
+      }
+    }
+  }
+
+  const list = [...nodes.values()].map(n => ({
+    ...n,
+    type: MERMAID_SHAPE_TYPES[n.shape] || inferTypeFromName(n.id, n.named ? n.label : '')
+  }));
+  return { nodes: list, edges, zones: zones.filter(z => z.ids.length) };
+}
+
+// Build the diagram from Mermaid text. Returns true when it produced one.
+function generateFromMermaid(text) {
+  const parsed = parseMermaid(text);
+  if (!parsed.nodes.length) return false;
+
+  const idMap = {};
+  const nodes = parsed.nodes.slice(0, MERMAID_MAX_NODES).map(n => {
+    const icon = NETWORK_ICONS[n.type] || NETWORK_ICONS.server;
+    const node = {
+      id: uid('n'), type: n.type, x: 0, y: 0,
+      label: n.label, sub: n.sub || '', color: icon.color
+    };
+    idMap[n.id] = node.id;
+    return node;
+  });
+
+  const edges = [];
+  const seen = new Map();
+  for (const e of parsed.edges) {
+    const from = idMap[e.from], to = idMap[e.to];
+    if (!from || !to || from === to) continue;
+    const key = [from, to].sort().join('>');
+    if (seen.has(key)) {
+      // Both directions of the same link are one line; keep any label.
+      const existing = seen.get(key);
+      if (e.label && !existing.label) existing.label = e.label.slice(0, 40);
+      continue;
+    }
+    if (edges.length >= MERMAID_MAX_EDGES) break;
+    const edge = {
+      id: uid('e'), from, to,
+      label: (e.label || '').slice(0, 40),
+      style: e.style || 'solid',
+      shape: 'straight'
+    };
+    edges.push(edge);
+    seen.set(key, edge);
+  }
+
+  layoutGraph(nodes, edges);
+  const zoneGroups = parsed.zones.map(z => ({
+    label: z.label,
+    nodes: z.ids.map(id => nodes.find(n => n.id === idMap[id])).filter(Boolean)
+  })).filter(z => z.nodes.length);
+
+  applyGenerated(nodes, edges, text,
+    `Mermaid syntax: ${nodes.length} devices, ${edges.length} links` +
+    (zoneGroups.length ? `, ${zoneGroups.length} zone(s)` : ''),
+    makeZones(zoneGroups));
+  return true;
+}
+
 // --- Message box wiring -----------------------------------------------------
 
 function handleGenerate() {
@@ -3740,6 +4053,10 @@ function handleGenerate() {
   const text = input.value.trim();
   if (!text) return;
   const hasAI = typeof window.aiGenerate === 'function';
+
+  // Structured arrow syntax is parsed exactly — never guessed at, and
+  // never sent to an AI backend.
+  if (looksLikeMermaid(text) && generateFromMermaid(text)) return;
 
   if (looksComplex(text) && hasAI) {
     window.aiGenerate(text);
