@@ -25,11 +25,13 @@ function xmlEscape(s) {
 
 function diagramBounds() {
   const zones = state.zones || [];
-  if (!state.nodes.length && !zones.length) return { x: 0, y: 0, w: 800, h: 600 };
-  const xs = state.nodes.map(n => n.x).concat(zones.map(z => z.x));
-  const ys = state.nodes.map(n => n.y).concat(zones.map(z => z.y));
-  const xe = state.nodes.map(n => n.x + NODE_W).concat(zones.map(z => z.x + z.w));
-  const ye = state.nodes.map(n => n.y + NODE_H).concat(zones.map(z => z.y + z.h));
+  const notes = state.notes || [];
+  if (!state.nodes.length && !zones.length && !notes.length) return { x: 0, y: 0, w: 800, h: 600 };
+  const boxes = zones.concat(notes);
+  const xs = state.nodes.map(n => n.x).concat(boxes.map(b => b.x));
+  const ys = state.nodes.map(n => n.y).concat(boxes.map(b => b.y));
+  const xe = state.nodes.map(n => n.x + NODE_W).concat(boxes.map(b => b.x + b.w));
+  const ye = state.nodes.map(n => n.y + NODE_H).concat(boxes.map(b => b.y + b.h));
   const minX = Math.min(...xs) - 40, minY = Math.min(...ys) - 40;
   const maxX = Math.max(...xe) + 40, maxY = Math.max(...ye) + 40;
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
@@ -52,16 +54,20 @@ function buildExportSvg() {
       `letter-spacing="0.5" fill="${z.color}">${xmlEscape(z.label.toUpperCase())}</text>\n`;
   }
 
+  const labelAt = (x, y, text) => {
+    const w = text.length * 6.6 + 10;
+    return `<rect x="${x - w / 2}" y="${y - 9}" width="${w}" height="18" rx="4" fill="#ffffff" stroke="#e2e8f0"/>\n` +
+      `<text x="${x}" y="${y + 4}" text-anchor="middle" font-size="11" fill="#475569">${xmlEscape(text)}</text>\n`;
+  };
+
   for (const e of state.edges) {
     const p = edgePath(e);
     if (!p) continue;
     const dash = e.style === 'dashed' ? ' stroke-dasharray="7 5"' : '';
     out += `<path d="${p.d}" fill="none" stroke="#64748b" stroke-width="2"${dash}/>\n`;
-    if (e.label) {
-      const w = e.label.length * 6.6 + 10;
-      out += `<rect x="${p.mid.x - w / 2}" y="${p.mid.y - 9}" width="${w}" height="18" rx="4" fill="#ffffff" stroke="#e2e8f0"/>\n` +
-        `<text x="${p.mid.x}" y="${p.mid.y + 4}" text-anchor="middle" font-size="11" fill="#475569">${xmlEscape(e.label)}</text>\n`;
-    }
+    if (e.label) out += labelAt(p.mid.x, p.mid.y, e.label);
+    if (e.fromLabel) out += labelAt(p.endA.x, p.endA.y, e.fromLabel);
+    if (e.toLabel) out += labelAt(p.endB.x, p.endB.y, e.toLabel);
   }
 
   for (const n of state.nodes) {
@@ -70,7 +76,17 @@ function buildExportSvg() {
     out += `<g transform="translate(${n.x},${n.y})">` +
       `<g transform="translate(${pad},10) scale(${ICON_SIZE / 64})" color="${n.color || icon.color}">${icon.svg}</g>` +
       `<text x="${NODE_W / 2}" y="${ICON_SIZE + 24}" text-anchor="middle" font-size="13" font-weight="600" fill="#1e293b">${xmlEscape(n.label)}</text>` +
+      (n.sub ? `<text x="${NODE_W / 2}" y="${ICON_SIZE + 38}" text-anchor="middle" font-size="10.5" fill="#64748b">${xmlEscape(n.sub)}</text>` : '') +
       `</g>\n`;
+  }
+
+  for (const note of (state.notes || [])) {
+    out += `<rect x="${note.x}" y="${note.y}" width="${note.w}" height="${note.h}" rx="8" ` +
+      `fill="#ffffff" fill-opacity="0.7" stroke="${note.color}" stroke-width="1.4"/>\n` +
+      `<text x="${note.x + 12}" y="${note.y + 22}" font-size="12.5" fill="${note.color}">` +
+      String(note.text || '').split('\n').map((line, i) =>
+        `<tspan x="${note.x + 12}" dy="${i === 0 ? 0 : 17}">${xmlEscape(line) || ' '}</tspan>`).join('') +
+      `</text>\n`;
   }
   return out + '</svg>';
 }
@@ -150,10 +166,16 @@ function buildDrawioXml() {
     cells += `<mxCell id="${z.id}" value="${xmlEscape(z.label)}" style="rounded=1;dashed=1;fillColor=${z.color};opacity=25;verticalAlign=top;fontStyle=1;html=1;" vertex="1" parent="1">` +
       `<mxGeometry x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" as="geometry"/></mxCell>`;
   }
+  for (const note of (state.notes || [])) {
+    cells += `<mxCell id="${note.id}" value="${xmlEscape(note.text || '')}" ` +
+      `style="rounded=1;dashed=0;fillColor=none;strokeColor=${note.color};fontColor=${note.color};align=left;verticalAlign=top;spacing=8;html=1;whiteSpace=wrap;" vertex="1" parent="1">` +
+      `<mxGeometry x="${note.x}" y="${note.y}" width="${note.w}" height="${note.h}" as="geometry"/></mxCell>`;
+  }
   for (const n of state.nodes) {
     const style = (DRAWIO_STYLES[n.type] || DRAWIO_STYLES.default) +
       `;fillColor=${n.color};strokeColor=#334155;fontColor=#1e293b;verticalLabelPosition=bottom;verticalAlign=top;html=1;`;
-    cells += `<mxCell id="${n.id}" value="${xmlEscape(n.label)}" style="${xmlEscape(style)}" vertex="1" parent="1">` +
+    const label = n.label + (n.sub ? '\n' + n.sub : '');
+    cells += `<mxCell id="${n.id}" value="${xmlEscape(label)}" style="${xmlEscape(style)}" vertex="1" parent="1">` +
       `<mxGeometry x="${n.x}" y="${n.y}" width="${ICON_SIZE + 12}" height="${ICON_SIZE + 12}" as="geometry"/></mxCell>`;
   }
   for (const e of state.edges) {
@@ -233,6 +255,30 @@ function buildVsdx() {
    </Shape>`;
   }
 
+  for (const note of (state.notes || [])) {
+    const id = shapeId++;
+    const w = note.w / PX_PER_IN, h = note.h / PX_PER_IN;
+    const cx = ix(note.x + note.w / 2), cy = iy(note.y + note.h / 2);
+    shapes += `
+   <Shape ID="${id}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
+    <Cell N="PinX" V="${cx.toFixed(4)}"/><Cell N="PinY" V="${cy.toFixed(4)}"/>
+    <Cell N="Width" V="${w.toFixed(4)}"/><Cell N="Height" V="${h.toFixed(4)}"/>
+    <Cell N="LocPinX" V="${(w / 2).toFixed(4)}"/><Cell N="LocPinY" V="${(h / 2).toFixed(4)}"/>
+    <Cell N="LineColor" V="${note.color}"/>
+    <Cell N="Rounding" V="0.0625"/>
+    <Cell N="VerticalAlign" V="0"/>
+    <Section N="Geometry" IX="0">
+     <Cell N="NoFill" V="1"/><Cell N="NoLine" V="0"/>
+     <Row T="RelMoveTo" IX="1"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>
+     <Row T="RelLineTo" IX="2"><Cell N="X" V="1"/><Cell N="Y" V="0"/></Row>
+     <Row T="RelLineTo" IX="3"><Cell N="X" V="1"/><Cell N="Y" V="1"/></Row>
+     <Row T="RelLineTo" IX="4"><Cell N="X" V="0"/><Cell N="Y" V="1"/></Row>
+     <Row T="RelLineTo" IX="5"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>
+    </Section>
+    <Text>${xmlEscape(note.text || '')}</Text>
+   </Shape>`;
+  }
+
   for (const n of state.nodes) {
     const id = shapeId++;
     nodeShapeIds[n.id] = id;
@@ -255,7 +301,7 @@ function buildVsdx() {
      <Row T="RelLineTo" IX="4"><Cell N="X" V="0"/><Cell N="Y" V="1"/></Row>
      <Row T="RelLineTo" IX="5"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>
     </Section>
-    <Text>${xmlEscape(n.label)}</Text>
+    <Text>${xmlEscape(n.label + (n.sub ? '\n' + n.sub : ''))}</Text>
    </Shape>`;
   }
 
@@ -281,7 +327,10 @@ function buildVsdx() {
      <Row T="MoveTo" IX="1"><Cell N="X" V="${gx1.toFixed(4)}"/><Cell N="Y" V="${gy1.toFixed(4)}"/></Row>
      <Row T="LineTo" IX="2"><Cell N="X" V="${gx2.toFixed(4)}"/><Cell N="Y" V="${gy2.toFixed(4)}"/></Row>
     </Section>
-    ${e.label ? `<Text>${xmlEscape(e.label)}</Text>` : ''}
+    ${(() => {
+      const t = [e.fromLabel, e.label, e.toLabel].filter(Boolean).join(' · ');
+      return t ? `<Text>${xmlEscape(t)}</Text>` : '';
+    })()}
    </Shape>`;
   }
 

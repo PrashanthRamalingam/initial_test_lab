@@ -241,6 +241,22 @@ function parseSegment(seg) {
     else standalone.push({ type: inferTypeFromHostname(tok), index: hm.index, count: 1, names: [tok] });
   }
 
+  // IP addresses / CIDRs near a device become its detail line:
+  // "AZURE cloud … with an IP of 10.96.98.42/30" → sub "10.96.98.42/30".
+  const ipRe = /\b\d{1,3}(?:\.\d{1,3}){3}(?:\s*\/\s*\d{1,2})?\b/g;
+  const orphanIps = [];
+  let ipm;
+  while ((ipm = ipRe.exec(seg)) !== null) {
+    let best = null, bestD = Infinity;
+    for (const entry of mentions.concat(standalone)) {
+      const d = Math.abs(entry.index - ipm.index);
+      if (d < bestD) { bestD = d; best = entry; }
+    }
+    const ip = ipm[0].replace(/\s+/g, '');
+    if (best && bestD <= 70 && !best.sub) best.sub = ip;
+    else orphanIps.push(ip);
+  }
+
   // "two switches: NGA-SC01-LGA ... and NGA-SC02-LGA": the far hostname
   // became a standalone entry, but it is one of the two — count it against
   // the mention so no extra unnamed switch appears.
@@ -251,7 +267,7 @@ function parseSegment(seg) {
 
   const entries = mentions.concat(standalone).sort((a, b) => a.index - b.index);
   const linkTerms = [...new Set(linkSpans.map(l => l.text.trim()))];
-  return { entries, linkTerms };
+  return { entries, linkTerms, orphanIps };
 }
 
 // Zone (container) grammar, detected per sentence:
@@ -293,6 +309,10 @@ function parseInstruction(text) {
         if (segs.length) {
           const p = segs[segs.length - 1];
           p.linkTerms = [...new Set(p.linkTerms.concat(g.linkTerms))];
+          // "AZURE cloud … with an IP of 10.96.98.42/30": the IP sits in a
+          // device-less segment — it belongs to the previous group's device.
+          const last = p.entries[p.entries.length - 1];
+          if (last && !last.sub && g.orphanIps && g.orphanIps.length) last.sub = g.orphanIps[0];
         } else {
           pendingTerms.push(...g.linkTerms);
         }
@@ -337,9 +357,9 @@ function buildFromGroups(groups) {
   const zoneOf = new Map();     // node id → zone label (first zone wins)
   const placedGlobal = new Set(); // nodes already given a layout slot
 
-  function makeNode(type, label) {
+  function makeNode(type, label, sub) {
     const icon = NETWORK_ICONS[type];
-    const node = { id: uid('n'), type, x: 0, y: 0, label, color: icon.color };
+    const node = { id: uid('n'), type, x: 0, y: 0, label, sub: sub || '', color: icon.color };
     nodes.push(node);
     return node;
   }
@@ -386,9 +406,11 @@ function buildFromGroups(groups) {
             if (small.length >= 2 && toks.length !== ktoks.length &&
                 small.every(t => big.has(t))) { match = node; break; }
           }
-          registry.set(key, match || makeNode(entry.type, name));
+          registry.set(key, match || makeNode(entry.type, name, entry.sub));
         }
-        place(registry.get(key));
+        const named = registry.get(key);
+        if (entry.sub && !named.sub) named.sub = entry.sub;
+        place(named);
       }
 
       const unnamed = Math.max(0, entry.count - entry.names.length);
@@ -409,13 +431,15 @@ function buildFromGroups(groups) {
               existing.label = brand;
             }
           }
-          if (!registry.has(key)) registry.set(key, makeNode(entry.type, baseLabel));
-          place(registry.get(key));
+          if (!registry.has(key)) registry.set(key, makeNode(entry.type, baseLabel, entry.sub));
+          const singleton = registry.get(key);
+          if (entry.sub && !singleton.sub) singleton.sub = entry.sub;
+          place(singleton);
         } else {
           typeCounts[entry.type] = (typeCounts[entry.type] || 0) + 1;
           const label = unnamed > 1 || typeCounts[entry.type] > 1
             ? `${baseLabel} ${typeCounts[entry.type]}` : baseLabel;
-          place(makeNode(entry.type, label));
+          place(makeNode(entry.type, label, entry.sub));
         }
       }
     }
@@ -662,6 +686,7 @@ function applyGenerated(nodes, edges, sourceText, note, zones) {
   state.nodes = nodes;
   state.edges = edges;
   state.zones = zones || [];
+  state.notes = [];
   selection = null;
   render();
   document.getElementById('btn-zoom-fit').click();

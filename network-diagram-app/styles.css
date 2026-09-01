@@ -312,6 +312,13 @@ body {
 }
 .zone-resize { cursor: nwse-resize; }
 
+/* Notes (free-text annotation blocks) */
+.note { cursor: move; }
+.note-rect { fill: var(--panel); fill-opacity: 0.72; stroke-width: 1.4; }
+.note.selected .note-rect { stroke-width: 2.2; fill-opacity: 0.9; }
+.note-text { font-size: 12.5px; user-select: none; -webkit-user-select: none; }
+.note-resize { cursor: nwse-resize; }
+
 /* Nodes */
 .node { cursor: move; }
 .node-box { fill: transparent; stroke: transparent; stroke-width: 2; rx: 10; }
@@ -323,6 +330,13 @@ body {
   font-weight: 600;
   text-anchor: middle;
   fill: var(--text);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.node-sub {
+  font-size: 10.5px;
+  text-anchor: middle;
+  fill: var(--muted);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -354,6 +368,17 @@ body {
   margin-bottom: 12px;
 }
 #props h3 { font-size: 14px; margin-bottom: 12px; }
+#props textarea {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel-2);
+  resize: vertical;
+  line-height: 1.4;
+}
 #props input[type="text"], #props select {
   font: inherit;
   font-size: 13px;

@@ -19,9 +19,10 @@ const ICON_SIZE = 60;
 const GRID = 8;             // snap grid
 
 let state = {
-  nodes: [],   // {id, type, x, y, label, color}
-  edges: [],   // {id, from, to, label, style: 'solid'|'dashed', shape: 'straight'|'elbow'}
+  nodes: [],   // {id, type, x, y, label, sub?, color} — sub = detail line (IP, VLAN…)
+  edges: [],   // {id, from, to, label, fromLabel?, toLabel?, style, shape}
   zones: [],   // {id, x, y, w, h, label, color} — named container boxes (DCs, sites)
+  notes: [],   // {id, x, y, w, h, text, color} — free-text annotation blocks
   bg: null,    // custom canvas background color, null = theme default
   counter: 1
 };
@@ -38,6 +39,7 @@ const scene = document.getElementById('scene');
 const zoneLayer = document.getElementById('zone-layer');
 const edgeLayer = document.getElementById('edge-layer');
 const nodeLayer = document.getElementById('node-layer');
+const noteLayer = document.getElementById('note-layer');
 const overlayLayer = document.getElementById('overlay-layer');
 
 // ---------------------------------------------------------------------------
@@ -50,11 +52,13 @@ const snap = (v) => Math.round(v / GRID) * GRID;
 const nodeById = (id) => state.nodes.find(n => n.id === id);
 const zoneById = (id) => (state.zones || []).find(z => z.id === id);
 
-// Older saved diagrams predate zones/bg — normalize after any state swap.
+// Older saved diagrams predate zones/notes/bg — normalize after any swap.
 function normalizeState() {
   if (!Array.isArray(state.zones)) state.zones = [];
+  if (!Array.isArray(state.notes)) state.notes = [];
   if (state.bg === undefined) state.bg = null;
 }
+const noteById = (id) => (state.notes || []).find(n => n.id === id);
 
 function toScene(evt) {
   // Convert a mouse event to scene (diagram) coordinates, honoring pan/zoom.
@@ -86,6 +90,7 @@ function render() {
   renderZones();
   renderEdges();
   renderNodes();
+  renderNotes();
   renderProperties();
   saveLocal();
 }
@@ -119,7 +124,9 @@ function edgePath(e) {
       const midY = (p1.y + p2.y) / 2;
       return {
         d: `M ${p1.x} ${p1.y} L ${p1.x} ${midY} L ${p2.x} ${midY} L ${p2.x} ${p2.y}`,
-        mid: { x: (p1.x + p2.x) / 2, y: midY }
+        mid: { x: (p1.x + p2.x) / 2, y: midY },
+        endA: { x: p1.x, y: p1.y + 22 * Math.sign(midY - p1.y || 1) },
+        endB: { x: p2.x, y: p2.y + 22 * Math.sign(midY - p2.y || -1) }
       };
     }
     const p1 = clipToNode(a, { x: cb.x, y: ca.y });
@@ -127,11 +134,20 @@ function edgePath(e) {
     const midX = (p1.x + p2.x) / 2;
     return {
       d: `M ${p1.x} ${p1.y} L ${midX} ${p1.y} L ${midX} ${p2.y} L ${p2.x} ${p2.y}`,
-      mid: { x: midX, y: (p1.y + p2.y) / 2 }
+      mid: { x: midX, y: (p1.y + p2.y) / 2 },
+      endA: { x: p1.x + 26 * Math.sign(midX - p1.x || 1), y: p1.y },
+      endB: { x: p2.x + 26 * Math.sign(midX - p2.x || -1), y: p2.y }
     };
   }
   const p1 = clipToNode(a, cb), p2 = clipToNode(b, ca);
-  return { d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`, mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 } };
+  const len = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+  const ux = (p2.x - p1.x) / len, uy = (p2.y - p1.y) / len;
+  return {
+    d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`,
+    mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+    endA: { x: p1.x + ux * 26, y: p1.y + uy * 26 },
+    endB: { x: p2.x - ux * 26, y: p2.y - uy * 26 }
+  };
 }
 
 function renderZones() {
@@ -182,13 +198,16 @@ function renderEdges() {
 
     g.append(hit, line);
 
-    if (e.label) {
+    // Labels: one mid-link plus optional per-end interface labels
+    // (Eth8/4 where the wire leaves one device, Te0/1/4 where it enters
+    // the other).
+    const addLabel = (x, y, text) => {
       const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      txt.setAttribute('x', path.mid.x);
-      txt.setAttribute('y', path.mid.y);
+      txt.setAttribute('x', x);
+      txt.setAttribute('y', y);
       txt.setAttribute('class', 'edge-label');
-      txt.textContent = e.label;
+      txt.textContent = text;
       g.append(bg, txt);
       // Size the backing rect after the text is in the DOM.
       requestAnimationFrame(() => {
@@ -199,7 +218,10 @@ function renderEdges() {
           bg.setAttribute('class', 'edge-label-bg');
         } catch (_) { /* detached during re-render */ }
       });
-    }
+    };
+    if (e.label) addLabel(path.mid.x, path.mid.y, e.label);
+    if (e.fromLabel) addLabel(path.endA.x, path.endA.y, e.fromLabel);
+    if (e.toLabel) addLabel(path.endB.x, path.endB.y, e.toLabel);
     edgeLayer.appendChild(g);
   }
 }
@@ -220,8 +242,30 @@ function renderNodes() {
       <rect class="node-box" x="${pad - 6}" y="4" width="${ICON_SIZE + 12}" height="${ICON_SIZE + 12}" rx="10"/>
       <g class="node-icon" transform="translate(${pad},10) scale(${ICON_SIZE / 64})"
          color="${n.color || icon.color}">${icon.svg}</g>
-      <text class="node-label" x="${NODE_W / 2}" y="${ICON_SIZE + 24}">${escapeHtml(n.label)}</text>`;
+      <text class="node-label" x="${NODE_W / 2}" y="${ICON_SIZE + 24}">${escapeHtml(n.label)}</text>
+      ${n.sub ? `<text class="node-sub" x="${NODE_W / 2}" y="${ICON_SIZE + 38}">${escapeHtml(n.sub)}</text>` : ''}`;
     nodeLayer.appendChild(g);
+  }
+}
+
+function renderNotes() {
+  noteLayer.innerHTML = '';
+  for (const note of (state.notes || [])) {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.classList.add('note');
+    g.dataset.id = note.id;
+    const selected = selection && selection.kind === 'note' && selection.id === note.id;
+    if (selected) g.classList.add('selected');
+    const lines = String(note.text || '').split('\n');
+    const tspans = lines.map((line, i) =>
+      `<tspan x="${note.x + 12}" dy="${i === 0 ? 0 : 17}">${escapeHtml(line) || ' '}</tspan>`).join('');
+    g.innerHTML = `
+      <rect class="note-rect" x="${note.x}" y="${note.y}" width="${note.w}" height="${note.h}" rx="8"
+            stroke="${note.color}"/>
+      <text class="note-text" x="${note.x + 12}" y="${note.y + 22}" fill="${note.color}">${tspans}</text>
+      ${selected ? `<rect class="note-resize" x="${note.x + note.w - 9}" y="${note.y + note.h - 9}"
+            width="16" height="16" rx="4" fill="${note.color}"/>` : ''}`;
+    noteLayer.appendChild(g);
   }
 }
 
@@ -344,10 +388,24 @@ svg.addEventListener('pointerdown', ev => {
 
   const nodeEl = ev.target.closest('.node');
   const edgeEl = ev.target.closest('.edge');
+  const noteHandleEl = ev.target.closest('.note-resize');
+  const noteEl = ev.target.closest('.note');
   const zoneHandleEl = ev.target.closest('.zone-resize');
   const zoneEl = ev.target.closest('.zone');
 
-  if (nodeEl) {
+  if (noteHandleEl && mode === 'select') {
+    const id = noteHandleEl.closest('.note').dataset.id;
+    selection = { kind: 'note', id };
+    drag = { kind: 'note-resize', id, moved: false };
+    render();
+  } else if (noteEl && mode === 'select') {
+    const id = noteEl.dataset.id;
+    const note = noteById(id);
+    const p = toScene(ev);
+    selection = { kind: 'note', id };
+    drag = { kind: 'note', id, dx: p.x - note.x, dy: p.y - note.y, moved: false };
+    render();
+  } else if (nodeEl) {
     const id = nodeEl.dataset.id;
     if (mode === 'connect') {
       handleConnectClick(id);
@@ -425,6 +483,20 @@ window.addEventListener('pointermove', ev => {
       if (n) { n.x = snap(p.x - m.dx); n.y = snap(p.y - m.dy); }
     }
     render();
+  } else if (drag.kind === 'note') {
+    const note = noteById(drag.id);
+    const p = toScene(ev);
+    if (!drag.moved) { pushUndo(); drag.moved = true; }
+    note.x = snap(p.x - drag.dx);
+    note.y = snap(p.y - drag.dy);
+    render();
+  } else if (drag.kind === 'note-resize') {
+    const note = noteById(drag.id);
+    const p = toScene(ev);
+    if (!drag.moved) { pushUndo(); drag.moved = true; }
+    note.w = Math.max(120, snap(p.x - note.x));
+    note.h = Math.max(50, snap(p.y - note.y));
+    render();
   } else if (drag.kind === 'zone-resize') {
     const z = zoneById(drag.id);
     const p = toScene(ev);
@@ -459,6 +531,11 @@ svg.addEventListener('dblclick', ev => {
     const e = state.edges.find(x => x.id === edgeEl.dataset.id);
     const label = prompt('Connection label (e.g. "GigE 1/0/1", "VPN"):', e.label || '');
     if (label !== null) { pushUndo(); e.label = label.trim(); render(); }
+  } else if (ev.target.closest('.note')) {
+    // Note editing happens in the properties panel (multi-line textarea);
+    // double-click just selects it.
+    selection = { kind: 'note', id: ev.target.closest('.note').dataset.id };
+    render();
   } else if (zoneEl) {
     const z = zoneById(zoneEl.dataset.id);
     const label = prompt('Zone name (e.g. "DC-EAST"):', z.label);
@@ -534,6 +611,8 @@ function deleteSelection() {
   } else if (selection.kind === 'zone') {
     // Deleting a zone keeps the devices inside it.
     state.zones = state.zones.filter(z => z.id !== selection.id);
+  } else if (selection.kind === 'note') {
+    state.notes = state.notes.filter(n => n.id !== selection.id);
   } else {
     state.edges = state.edges.filter(e => e.id !== selection.id);
   }
@@ -577,6 +656,19 @@ function renderProperties() {
     panel.innerHTML = '<p class="props-hint">Select a node or connection to edit its properties.</p>';
     return;
   }
+  if (selection.kind === 'note') {
+    const note = noteById(selection.id);
+    if (!note) { panel.innerHTML = ''; return; }
+    panel.innerHTML = `
+      <h3>Note</h3>
+      <label>Text <textarea id="p-ntext" rows="6">${escapeHtml(note.text || '')}</textarea></label>
+      <label>Color <input id="p-ncolor" type="color" value="${note.color}"></label>
+      <button id="p-ndelete" class="danger">Delete note</button>`;
+    $('#p-ntext').addEventListener('change', ev => { pushUndo(); note.text = ev.target.value; render(); });
+    $('#p-ncolor').addEventListener('input', ev => { note.color = ev.target.value; renderNotes(); saveLocal(); });
+    $('#p-ndelete').addEventListener('click', deleteSelection);
+    return;
+  }
   if (selection.kind === 'zone') {
     const z = zoneById(selection.id);
     if (!z) { panel.innerHTML = ''; return; }
@@ -597,17 +689,24 @@ function renderProperties() {
     panel.innerHTML = `
       <h3>${NETWORK_ICONS[n.type].label}</h3>
       <label>Label <input id="p-label" type="text" value="${escapeHtml(n.label)}"></label>
+      <label>Details (IP, VLAN, model…) <input id="p-sub" type="text" value="${escapeHtml(n.sub || '')}"></label>
       <label>Color <input id="p-color" type="color" value="${n.color}"></label>
       <button id="p-delete" class="danger">Delete node</button>`;
     $('#p-label').addEventListener('change', ev => { pushUndo(); n.label = ev.target.value; render(); });
+    $('#p-sub').addEventListener('change', ev => { pushUndo(); n.sub = ev.target.value.trim(); render(); });
     $('#p-color').addEventListener('input', ev => { n.color = ev.target.value; renderNodes(); saveLocal(); });
     $('#p-delete').addEventListener('click', deleteSelection);
   } else {
     const e = state.edges.find(x => x.id === selection.id);
     if (!e) { panel.innerHTML = ''; return; }
+    const fromNode = nodeById(e.from), toNode = nodeById(e.to);
     panel.innerHTML = `
       <h3>Connection</h3>
-      <label>Label <input id="p-elabel" type="text" value="${escapeHtml(e.label || '')}"></label>
+      <label>Label (middle) <input id="p-elabel" type="text" value="${escapeHtml(e.label || '')}"></label>
+      <label>Label at ${escapeHtml(fromNode ? fromNode.label : 'A')}
+        <input id="p-eflabel" type="text" value="${escapeHtml(e.fromLabel || '')}" placeholder="e.g. Eth8/4"></label>
+      <label>Label at ${escapeHtml(toNode ? toNode.label : 'B')}
+        <input id="p-etlabel" type="text" value="${escapeHtml(e.toLabel || '')}" placeholder="e.g. Te0/1/4"></label>
       <label>Line style
         <select id="p-estyle">
           <option value="solid"${e.style === 'solid' ? ' selected' : ''}>Solid</option>
@@ -620,6 +719,8 @@ function renderProperties() {
         </select></label>
       <button id="p-edelete" class="danger">Delete connection</button>`;
     $('#p-elabel').addEventListener('change', ev => { pushUndo(); e.label = ev.target.value; render(); });
+    $('#p-eflabel').addEventListener('change', ev => { pushUndo(); e.fromLabel = ev.target.value.trim(); render(); });
+    $('#p-etlabel').addEventListener('change', ev => { pushUndo(); e.toLabel = ev.target.value.trim(); render(); });
     $('#p-estyle').addEventListener('change', ev => { pushUndo(); e.style = ev.target.value; render(); });
     $('#p-eshape').addEventListener('change', ev => { pushUndo(); e.shape = ev.target.value; render(); });
     $('#p-edelete').addEventListener('click', deleteSelection);
@@ -681,9 +782,84 @@ $('#file-open').addEventListener('change', ev => {
 $('#btn-clear').addEventListener('click', () => {
   if (!state.nodes.length || confirm('Clear the whole diagram?')) {
     pushUndo();
-    state = { nodes: [], edges: [], zones: [], bg: state.bg, counter: state.counter };
+    state = { nodes: [], edges: [], zones: [], notes: [], bg: state.bg, counter: state.counter };
     selection = null;
     render();
+  }
+});
+
+$('#btn-add-note').addEventListener('click', () => {
+  pushUndo();
+  const r = svg.getBoundingClientRect();
+  const note = {
+    id: uid('t'),
+    x: snap((r.width / 2 - view.x) / view.zoom + 120),
+    y: snap((r.height / 2 - view.y) / view.zoom - 160),
+    w: 240, h: 110, color: '#64748b',
+    text: 'Note\nDouble-click to select, edit text in\nthe Properties panel.'
+  };
+  state.notes.push(note);
+  selection = { kind: 'note', id: note.id };
+  render();
+});
+
+// ---------------------------------------------------------------------------
+// Share via URL: the whole diagram travels inside the link (#d=…), gzipped
+// with the browser's native CompressionStream when available. Fully offline
+// once the page is loaded — no server stores anything.
+// ---------------------------------------------------------------------------
+
+function b64FromBytes(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function bytesFromB64(b64) {
+  const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return bytes;
+}
+
+async function encodeDiagram() {
+  const json = JSON.stringify(state);
+  const raw = new TextEncoder().encode(json);
+  try {
+    if (window.CompressionStream) {
+      const stream = new Blob([raw]).stream().pipeThrough(new CompressionStream('gzip'));
+      const buf = new Uint8Array(await new Response(stream).arrayBuffer());
+      return 'z' + b64FromBytes(buf);
+    }
+  } catch (_) {}
+  return 'j' + b64FromBytes(raw);
+}
+
+async function decodeDiagram(data) {
+  const kind = data[0];
+  const bytes = bytesFromB64(data.slice(1));
+  let json;
+  if (kind === 'z') {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    json = await new Response(stream).text();
+  } else {
+    json = new TextDecoder().decode(bytes);
+  }
+  const parsed = JSON.parse(json);
+  if (!parsed || !Array.isArray(parsed.nodes)) throw new Error('bad diagram');
+  return parsed;
+}
+
+$('#btn-share').addEventListener('click', async () => {
+  const data = await encodeDiagram();
+  const url = location.origin + location.pathname + '#d=' + data;
+  history.replaceState(null, '', '#d=' + data);
+  try {
+    await navigator.clipboard.writeText(url);
+    setStatus('Link copied — anyone who opens it sees this exact diagram.');
+  } catch (_) {
+    prompt('Copy this link to share the diagram:', url);
   }
 });
 
@@ -740,8 +916,27 @@ $('#btn-zoom-fit').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 
 buildPalette();
+
+// A shared link (#d=…) beats the locally saved diagram.
+const sharedHash = location.hash.match(/^#d=(.+)$/);
+if (sharedHash) {
+  decodeDiagram(sharedHash[1]).then(parsed => {
+    pushUndo(); // the previously saved diagram stays one Ctrl+Z away
+    state = parsed;
+    normalizeState();
+    selection = null;
+    render();
+    document.getElementById('btn-zoom-fit').click();
+    setStatus(`Opened shared diagram (${state.nodes.length} devices).`);
+  }).catch(() => {
+    setStatus('That shared link couldn’t be read — showing your saved diagram instead.');
+    loadLocal();
+    render();
+  });
+}
+
 loadLocal();
-if (!state.nodes.length) {
+if (!sharedHash && !state.nodes.length) {
   // Seed a tiny demo so the first visit isn't a blank screen.
   state = {
     counter: 100,
