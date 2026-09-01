@@ -34,6 +34,11 @@ jobs:
         with:
           enablement: true
 
+      # Stamp asset URLs with the commit SHA so browsers can never mix a
+      # new page with stale cached scripts (Pages caches assets ~10 min).
+      - name: Cache-bust assets
+        run: sed -i "s/__BUILD__/${GITHUB_SHA::8}/g" network-diagram-app/index.html
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
