@@ -17,33 +17,54 @@ The agent does the language work; NetDraw does the drawing and the exports.
 | Field | Value |
 |---|---|
 | **Agent Name** | `Network Diagram Builder` |
-| **Response Model** | The most capable general model in the dropdown. This is a structured-output task, so a mid-tier model is usually enough — test with a real topology before standardising. |
-| **Short Description** | `Turns network descriptions, port maps and change requests into diagram syntax you can render and export as Visio, PDF or PNG.` |
+| **Response Model** | `Claude Opus -4.8` — the strongest option for pulling topology out of messy configs and long port maps. `Claude-Haiku-4.5` is the cheap/fast alternative for short descriptions; test both on a real topology. |
+| **Short Description** | `Turns network descriptions, configs and port maps into diagrams you can edit here and export as Visio, PDF or PNG.` |
 | **Instructions** | Paste the whole of `INSTRUCTIONS.md`. |
 | **Knowledge / files** (next step) | Upload `KNOWLEDGE-netdraw-syntax.md`. If the platform has no knowledge upload, append that file to the end of the Instructions instead. |
-| **Tools** | None required. This agent only generates text. |
+| **Tools** (Tools Management tab) | Enable **Editable Diagrams** (renders the diagram in the chat) and **File Upload** (so you can drop in configs and port maps). Add **Generate Document** if you want HLD/handover packs. Web Search, Web Scraper, AI Research and Interactive Chart are not needed. |
+
+### Check what Editable Diagrams accepts
+
+Most such tools take Mermaid, which is what this agent emits. Confirm with a
+one-line test before rolling the agent out:
+
+    A[Router] --> B[Switch]
+
+If the tool rejects it, ask it (or the platform owner) which syntax it wants
+— draw.io XML and PlantUML are the usual alternatives — and the Instructions
+can be adjusted to emit that instead. NetDraw keeps consuming the mermaid
+either way.
 
 ## Using it
 
-1. Describe the network to the agent, or paste a port map, an existing
-   diagram plus a change request, or config output.
-2. Copy the ```mermaid block it returns.
-3. Open NetDraw (`netdraw-standalone.html`, or the hosted app), paste into
-   the message box at the bottom of the canvas, and press Generate.
+1. Describe the network to the agent, upload a config or port map, or paste
+   an existing diagram plus a change request.
+2. The Editable Diagrams tool renders it in the chat — good enough for
+   review, discussion and quick iteration.
+3. When you need a deliverable, copy the ```mermaid block, open NetDraw
+   (`netdraw-standalone.html` or the hosted app), paste it into the message
+   box at the bottom of the canvas and press Generate.
 4. Fix any wrong icon with the Device type dropdown, drag anything you want
-   moved, then export: PNG, SVG, PDF, Visio (.vsdx) or draw.io.
+   moved, add zones and notes, then export: PNG, SVG, PDF, Visio (.vsdx) or
+   draw.io.
 
-## Why the agent does not draw the diagram itself
+Rule of thumb: **the platform for the conversation, NetDraw for the
+artefact.** Only NetDraw writes .vsdx, carries your imported Cisco stencils,
+and works with no network at all.
 
-An agent in a chat box returns text. NetDraw is the renderer: it turns that
-text into positioned icons with a crossing-reduced layout, zones and notes,
-and writes the Visio/draw.io/PDF files. Keeping the split means the agent
-needs no tools, no network access and no plugins — and every diagram stays
-editable afterwards.
+## Division of labour
 
-## If your platform can host tools instead
+| | Agent (AgentGPT) | NetDraw |
+|---|---|---|
+| Reads messy prose, configs, port maps | yes | no |
+| Renders a diagram to look at | yes, via Editable Diagrams | yes |
+| Visio `.vsdx` / draw.io / PDF / PNG export | no | yes |
+| Imported Cisco / vendor stencils | no | yes |
+| Zones, annotation notes, per-end interface labels | no | yes |
+| Works with no network | no | yes |
 
-Should the platform later allow a tool/function that returns files, the same
-instructions work unchanged — point the tool at NetDraw's diagram JSON
-(the format the **Save** button writes and the **Open** button reads) rather
-than mermaid, and the agent can hand back a ready-made `.json` diagram.
+## If the platform ever allows custom tools
+
+A tool that returns files could skip the copy-paste: point it at NetDraw's
+diagram JSON — the format the **Save** button writes and the **Open** button
+reads — and the agent can hand back a ready-made `.json` diagram.
