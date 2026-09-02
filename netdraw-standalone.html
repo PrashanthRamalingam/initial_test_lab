@@ -3681,7 +3681,25 @@ function layoutGraph(nodes, edges) {
     }
     return false;
   };
-  const layerEdges = edges.filter(e => !isPeer(e));
+  // A cycle (a BGP session pointing back at the cloud, a ring) has no
+  // valid layering: depth-first search finds the edges that close each
+  // loop and leaves them out of the ranking. They are still drawn.
+  const forward = edges.filter(e => !isPeer(e));
+  const adjacency = {};
+  for (const n of nodes) adjacency[n.id] = [];
+  for (const e of forward) if (adjacency[e.from]) adjacency[e.from].push(e);
+  const visitState = {};
+  const backEdges = new Set();
+  const walk = (id) => {
+    visitState[id] = 1;
+    for (const e of adjacency[id] || []) {
+      if (visitState[e.to] === 1) backEdges.add(e);
+      else if (!visitState[e.to]) walk(e.to);
+    }
+    visitState[id] = 2;
+  };
+  for (const n of nodes) if (!visitState[n.id]) walk(n.id);
+  const layerEdges = forward.filter(e => !backEdges.has(e));
 
   const layerOf = {};
   const incoming = {};
